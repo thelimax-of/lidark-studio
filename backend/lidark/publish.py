@@ -122,20 +122,54 @@ def _yt_creds(acc: Account) -> dict:
     return json.loads(c.to_json())
 
 
+def go_live_at(pub: Publication) -> datetime | None:
+    """Horário em que o YouTube deve tornar o vídeo público sozinho (vídeo enviado antes como privado)."""
+    when = pub.scheduled_at
+    if pub.privacy != "public" or when is None:
+        return None
+    when = when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+    return when if (when - now()).total_seconds() >= 5 * 60 else None
+
+
+def _has_ai_imagery(video: Video) -> bool:
+    """O YouTube exige o selo "conteúdo alterado ou sintético" para cenas realistas geradas por IA.
+    Fotos de arquivo, gráficos animados e o mascote cartoon não precisam. Na dúvida (sem registro), declara."""
+    imgs = (video.assets or {}).get("images")
+    if not isinstance(imgs, list) or not imgs:
+        return True
+    return any(not isinstance(p, dict) or p.get("kind") not in ("real", "graphic", "reuse", "video", None) for p in imgs)
+
+
+def _hashtags(title: str, fmt: str, script_tags: list[str], channel_tags: list[str]) -> str:
+    """Poucas hashtags (3 no máximo): muitas parecem spam e diluem o assunto. Prioriza as do roteiro."""
+    seen, out = set(), []
+    for h in script_tags + channel_tags:
+        h = "#" + str(h).strip().lstrip("#").replace(" ", "")
+        if len(h) > 1 and h.lower() not in seen and h.lower() != "#shorts" and h.lower() not in title.lower():
+            seen.add(h.lower())
+            out.append(h)
+    if fmt == "short":
+        return " ".join((["#Shorts"] if "#shorts" not in title.lower() else []) + out[:2])
+    return " ".join(out[:3])
+
+
 def yt_upload(acc: Account, pub: Publication, video: Video, sc: Script, ch: Channel, ctx: JobContext) -> tuple[str, str]:
     from googleapiclient.http import MediaFileUpload
     yt = _yt_client(_yt_creds(acc))
     title = pub.title[:95]
     tags = list(dict.fromkeys(sc.tags or []))[:25]
-    hashtags = " ".join(dict.fromkeys((sc.hashtags or []) + (ch.default_hashtags or [])))
-    if video.format == "short" and "#shorts" not in (title + hashtags).lower():
-        hashtags = "#Shorts " + hashtags
+    hashtags = _hashtags(title, video.format, sc.hashtags or [], ch.default_hashtags or [])
     desc = _description(pub.description or sc.description, sc, video, hashtags)
+    status: dict[str, Any] = {"privacyStatus": pub.privacy, "selfDeclaredMadeForKids": False,
+                              "containsSyntheticMedia": _has_ai_imagery(video)}
+    live = go_live_at(pub)
+    if live:
+        status.update(privacyStatus="private", publishAt=live.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"))
+        ctx.log(f"Enviado como privado; o YouTube publica às {live.astimezone():%H:%M}")
     body = {
         "snippet": {"title": title, "description": desc[:4900], "tags": tags, "categoryId": ch.yt_category or "27",
                     "defaultLanguage": "pt-BR", "defaultAudioLanguage": "pt-BR"},
-        "status": {"privacyStatus": pub.privacy, "selfDeclaredMadeForKids": False,
-                   "containsSyntheticMedia": True},
+        "status": status,
     }
     media = MediaFileUpload(str(MEDIA_DIR / video.path), chunksize=8 * 1024 * 1024, resumable=True, mimetype="video/mp4")
     req = yt.videos().insert(part="snippet,status", body=body, media_body=media)
@@ -295,9 +329,10 @@ def job_publish(ctx: JobContext) -> dict:
             s.add(p)
             s.commit()
         raise
+    live = go_live_at(pub) if acc.platform == "youtube" else None
     with session() as s:
         p = s.get(Publication, pub.id)
-        p.status, p.external_id, p.url, p.published_at, p.error = "published", ext, url, now(), ""
+        p.status, p.external_id, p.url, p.published_at, p.error = "published", ext, url, live or now(), ""
         s.add(p)
         v = s.get(Video, video.id)
         v.status = "published"
@@ -305,8 +340,12 @@ def job_publish(ctx: JobContext) -> dict:
         s.commit()
     ctx.log(f"Publicado: {url or ext}")
     from . import notify
-    notify.safe(f"✅ No ar · {ch.name}", pub.title.replace("#Shorts", "").strip(), event="published", tags=["white_check_mark"],
-                click=url or "")
+    if live:
+        notify.safe(f"📅 Enviado · {ch.name}", f"{pub.title.replace('#Shorts', '').strip()}\nVai ao ar às {live.astimezone():%H:%M}",
+                    event="published", tags=["calendar"], click=url or "")
+    else:
+        notify.safe(f"✅ No ar · {ch.name}", pub.title.replace("#Shorts", "").strip(), event="published", tags=["white_check_mark"],
+                    click=url or "")
     if acc.platform == "youtube":
         from .community import after_publish
         after_publish(pub.id, pub.channel_id)
@@ -320,9 +359,23 @@ def job_publish(ctx: JobContext) -> dict:
 @handler("collect_metrics")
 def job_collect_metrics(ctx: JobContext) -> dict:
     from .analytics import generate_insights
+    only = ctx.channel_id  # sincronização manual de um canal (botão em Métricas); sem canal = todos
     with session() as s:
-        accs = s.exec(select(Account)).all()
+        q = select(Account)
+        if only:
+            q = q.where(Account.channel_id == only)
+        accs = s.exec(q).all()
     total = 0
+    if only and any(a.platform == "youtube" and a.credentials for a in accs):
+        ctx.update(0.02, "Atualizando inscritos e views do canal")
+        try:
+            from .channels import sync_profile
+            from .growth import ypp_cached
+            sync_profile(only)
+            with session() as s:
+                ypp_cached(s.get(Channel, only), 0)
+        except Exception as e:  # noqa: BLE001
+            ctx.log(f"Perfil do canal: {e}")
     for n, acc in enumerate(accs):
         if not acc.credentials or acc.platform not in METRICS:
             continue
@@ -357,7 +410,7 @@ def job_collect_metrics(ctx: JobContext) -> dict:
             s.commit()
     ctx.log(f"{total} leituras de métricas salvas")
     with session() as s:
-        chans = [c.id for c in s.exec(select(Channel)).all()]
+        chans = [only] if only else [c.id for c in s.exec(select(Channel)).all()]
     from .retention import generate_retention_insights
     for cid in chans:
         try:

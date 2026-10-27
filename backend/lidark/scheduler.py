@@ -32,10 +32,14 @@ def _save(st: dict) -> None:
     STATE.write_text(json.dumps(st))
 
 
+# envia ao YouTube como privado antes do horário; o YouTube publica sozinho na hora (já processado em HD)
+PRE_UPLOAD = timedelta(minutes=35)
+
+
 def due_publications() -> None:
     with session() as s:
         due = s.exec(select(Publication).where(Publication.status == "scheduled",
-                                               Publication.scheduled_at <= now())).all()
+                                               Publication.scheduled_at <= now() + PRE_UPLOAD)).all()
         for p in due:
             p.status = "uploading"
             s.add(p)

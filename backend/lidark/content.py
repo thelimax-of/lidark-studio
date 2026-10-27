@@ -302,14 +302,20 @@ REGRAS:
   Nesses casos: "visual": {{"kind": "timeline", "data": {{...}}. Varie os tipos; nunca dois gráficos iguais seguidos. Dados SÓ de fatos confirmados.
 - "emphasis": 1-3 palavras-chave da cena para destacar em dourado na legenda (palavras exatas do texto).
 - "label": etiqueta curta (1-3 palavras) que descreve a imagem da cena, ex.: "Cangaceiros", "Ataque surpresa", "Reino Ptolemaico".
+- {('LOOP: a última frase da história (logo antes do CTA) retoma a imagem ou a ideia do gancho, para o replay automático emendar no começo. CTA curto: no máximo 12 palavras.' if fmt == 'short' else 'CTA curto e natural, sem encerramento longo.')}
+SEO (o feed mostra só ~40-60 caracteres do título):
+- TÍTULO: no máximo 60 caracteres; o ASSUNTO (nome, lugar, objeto) e a tensão nas 3-4 PRIMEIRAS palavras. Escrita normal (só a 1ª letra maiúscula); no máximo UMA palavra em CAIXA ALTA para dar ênfase. Nada que o vídeo não entregue.
+- DESCRIÇÃO: a 1ª frase resume o vídeo com os termos que alguém digitaria na busca, de forma natural (sem lista de palavras-chave).
+- TAGS: 5 a 10, incluindo variações e erros de digitação comuns do assunto principal.
+- HASHTAGS: 2 ou 3, específicas do assunto (nada genérico como #viral ou #fyp).
 
 Responda JSON:
-{{"title": "título final otimizado (máx 70 caracteres, com curiosidade)",
+{{"title": "título final otimizado (máx 60 caracteres, assunto nas primeiras palavras)",
   "hook": "primeira frase",
   "scenes": [{{"text": "narração da cena", "visual": {{"kind": "real|ai|timeline|counter|map|dossier|versus|quote|list", "query": "...", "query_pt": "...", "prompt": "...", "data": {{}}}}, "emphasis": ["..."], "label": "..."}}],
   "description": "descrição única para o YouTube, 2-3 frases escritas do zero para ESTE vídeo (sem frases-padrão)",
-  "tags": ["tags SEO"],
-  "hashtags": ["#hashtags"],
+  "tags": ["5 a 10 tags"],
+  "hashtags": ["#2a3hashtags"],
   "thumbnail_text": "texto de 2-4 palavras para a thumbnail"}}"""
     data = llm.complete_json(prompt, temperature=0.8)
     data["sources"] = [{"title": s["title"], "url": s["url"]} for s in dossier["sources"]]
