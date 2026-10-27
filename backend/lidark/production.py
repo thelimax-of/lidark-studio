@@ -12,12 +12,13 @@ import numpy as np
 from PIL import Image
 
 from . import captions, music, tts, visuals
+from . import config
 from .config import MEDIA_DIR
 from .db import session
 from .jobs import JobContext
 from .media import audio_duration, decode_audio, run_ffmpeg
 from .models import Channel, Script
-from .render.core import SceneT, Timeline, Word, render
+from .render.core import Clip, SceneT, Timeline, Word, render
 from .render.infographics import KINDS as GRAPHIC_KINDS
 
 log = logging.getLogger("lidark.production")
@@ -147,7 +148,17 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
     if used_urls:
         ctx.log(f"Evitando {len(used_urls)} imagens já usadas em vídeos recentes")
 
-    stats = {"hd": 0}
+    stats = {"hd": 0, "clips": 0}
+    import threading
+    clip_lock = threading.Lock()
+    max_clips = 3 if vertical else 8  # filmagem é ouro, mas foto bem escolhida também segura — sem exagero
+
+    def _clip_slot() -> bool:
+        with clip_lock:
+            if stats["clips"] >= max_clips:
+                return False
+            stats["clips"] += 1
+            return True
 
     def pick(i_s):
         i, s = i_s
@@ -161,6 +172,23 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
                                          log_fn=lambda m: ctx.log(f"Cena {i + 1}: {m}"), used=used_urls)
             done[0] += 1
             return _hd(r) or {"kind": "graphic", "graphic": "dossier"}
+        wants_video = s.get("video") or (s.get("visual") or {}).get("video")
+        if wants_video and kind == "real" and config.get("footage_enabled") and _clip_slot():
+            from . import footage
+            ws = scene_words[i] if i < len(scene_words) else []
+            need = (ws[-1].end - ws[0].start + 0.4) if ws else 4.0
+            try:
+                rv = footage.pick_scene_clip(s, context, need, (W, H), used_urls,
+                                             log_fn=lambda m: ctx.log(f"Cena {i + 1}: {m}"))
+            except Exception as e:  # noqa: BLE001
+                rv = None
+                ctx.log(f"Cena {i + 1}: filmagem falhou ({e}) — usando foto")
+            if rv:
+                done[0] += 1
+                ctx.update(0.15 + 0.4 * done[0] / len(scenes), f"Imagens: {done[0]}/{len(scenes)}")
+                return rv
+            with clip_lock:
+                stats["clips"] -= 1  # não achou: libera a vaga para outra cena
         r = visuals.pick_scene_image(s, context, ch.image_style, ai_size, ch.visual_mode,
                                      log_fn=lambda m: ctx.log(f"Cena {i + 1}: {m}"), used=used_urls)
         done[0] += 1
@@ -181,6 +209,9 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
         picks = list(ex.map(pick, enumerate(scenes)))
     if stats["hd"]:
         ctx.log(f"{stats['hd']} foto(s) pequena(s) ampliada(s) com IA para ficarem nítidas em tela cheia")
+    n_clips = sum(1 for p in picks if p and p.get("clip"))
+    if n_clips:
+        ctx.log(f"{n_clips} cena(s) com filmagem real")
     images: list[Image.Image | None] = []
     for i, p in enumerate(picks):
         if p and p.get("kind") == "graphic":
@@ -218,7 +249,8 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
         graphic = {"kind": v["kind"], "data": v.get("data") or {}} if v.get("kind") in GRAPHIC_KINDS else None
         if graphic and graphic["kind"] == "dossier":
             graphic["data"] = {**graphic["data"], "_photo": bool((picks[i] or {}).get("path"))}
-        scene_ts.append(SceneT(i, start, 0, s["text"], images[i], label[:28], step, ws, str(s.get("fx") or ""), graphic))
+        clip = Clip(picks[i]["clip"]) if (picks[i] or {}).get("clip") else None
+        scene_ts.append(SceneT(i, start, 0, s["text"], images[i], label[:28], step, ws, str(s.get("fx") or ""), graphic, clip))
     for i, st in enumerate(scene_ts):
         st.end = scene_ts[i + 1].start if i + 1 < n else narration_end
     # a tela final pode completar no máximo 3s (nunca fica repetindo o encerramento)

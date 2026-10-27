@@ -145,12 +145,13 @@ class OuroTemplate:
         return rounded_mask(w, h, max(2, int(14 * self.k) - max(3, int(7 * self.k))))
 
     def _framed_image(self, scene_idx: int, w: int, h: int, zoom: float = 1.0,
-                      focus: tuple[float, float] = (0.5, 0.42)) -> Image.Image:
+                      focus: tuple[float, float] = (0.5, 0.42), t: float | None = None) -> Image.Image:
         """Imagem da cena com moldura dourada e sombra, em tamanho w×h, com zoom/foco (Ken Burns)."""
         sc = self.tl.scenes[scene_idx]
         shell, pad, b = self._frame_shell(w, h)
         iw, ih = w - 2 * b, h - 2 * b
-        inner = fit_cover(sc.image, iw, ih, zoom=zoom, focus=focus).convert("RGBA")
+        src = sc.clip.frame(t - sc.start) if (sc.clip is not None and t is not None) else None
+        inner = fit_cover(src or sc.image, iw, ih, zoom=(1.0 if src else zoom), focus=focus).convert("RGBA")
         inner.putalpha(self._inner_mask(iw, ih))
         out = shell.copy()
         out.alpha_composite(inner, (pad + b, pad + b))
@@ -570,7 +571,7 @@ class OuroTemplate:
             if bpl.enter == "zoom_reveal" and ep < 1:
                 z *= 2.3 - 1.3 * ease_out_cubic(max(0.0, ep))
             if ep >= 0:
-                img = self._framed_image(sc.index, w, h, z, foc)
+                img = self._framed_image(sc.index, w, h, z, foc, t)
                 if abs(rot) > 0.05:
                     img = fx._rot(img, rot)
                 img, dx, dy, op = fx.apply_enter(img, bpl.enter, ep)

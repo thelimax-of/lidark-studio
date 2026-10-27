@@ -32,6 +32,7 @@ DEFAULTS: dict[str, Any] = {
     "glm_api_key": "",
     "glm_base_url": "https://api.z.ai/api/paas/v4",
     "glm_model": "glm-4.5-flash",
+    "footage_enabled": False,  # filmagens reais nas cenas (experimental, desligado)
     "ntfy_enabled": False,  # avisos no celular (app ntfy)
     "ntfy_server": "https://ntfy.sh",
     "ntfy_topic": "",

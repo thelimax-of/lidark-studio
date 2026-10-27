@@ -157,7 +157,8 @@ def _glm(prompt: str, system: str | None, json_mode: bool, temperature: float,
     if _is_cool(ck):
         raise QuotaError("GLM em espera")
     msgs = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
-    body: dict[str, Any] = {"model": model, "messages": msgs, "temperature": temperature}
+    body: dict[str, Any] = {"model": model, "messages": msgs, "temperature": temperature,
+                            "max_tokens": 16000}  # roteiros longos em JSON: sem isso a resposta vem cortada
     if json_mode:
         body["response_format"] = {"type": "json_object"}
     if model.startswith("glm-4.5") or model.startswith("glm-4.6"):

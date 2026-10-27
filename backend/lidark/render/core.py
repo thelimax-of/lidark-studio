@@ -38,6 +38,39 @@ class SceneT:
     words: list[Word] = field(default_factory=list)
     fx: str = ""  # efeito pedido pelo roteiro (mito | verdade)
     graphic: dict | None = None  # cena animada com dados: {"kind": "timeline", "data": {...}}
+    clip: Any = None  # filmagem real da cena (Clip) — quando existe, toca no lugar da foto
+
+
+class Clip:
+    """Filmagem já recortada no tamanho do vídeo: lê quadros em sequência (sem carregar tudo na memória)."""
+
+    def __init__(self, path: str, fps: int = 30):
+        self.path, self.fps = path, fps
+        self._gen = None
+        self._i = -1
+        self._cur: Image.Image | None = None
+        self.size = (0, 0)
+
+    def _open(self) -> None:
+        import imageio_ffmpeg
+        self._gen = imageio_ffmpeg.read_frames(self.path, pix_fmt="rgb24")
+        meta = next(self._gen)
+        self.size = tuple(meta["size"])
+        self._i = -1
+
+    def frame(self, t: float) -> Image.Image | None:
+        idx = max(0, int(t * self.fps))
+        if self._gen is None or idx < self._i:
+            self._open()
+        while self._i < idx:
+            try:
+                buf = next(self._gen)
+            except StopIteration:
+                break  # clipe acabou: segura o último quadro
+            self._i += 1
+            if self._i >= idx - 0:
+                self._cur = Image.frombytes("RGB", self.size, buf)
+        return self._cur
 
 
 @dataclass

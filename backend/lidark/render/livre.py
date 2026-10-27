@@ -87,6 +87,8 @@ class LivreTemplate(OuroTemplate):
                 lay = "intro"
             elif sc.index in self.graphics:
                 lay = "graphic"
+            elif sc.clip is not None:
+                lay = "full"  # filmagem real: sempre em tela cheia
             else:
                 im = sc.image
                 ar = im.width / im.height if im is not None else 1.0
@@ -182,10 +184,11 @@ class LivreTemplate(OuroTemplate):
             out = self.bg.copy()
             self.particles.draw(out, t)
             return out
+        photo = (sc.clip.frame(local) if sc.clip is not None else None) or sc.image
         if lay == "intro" and self.lk.get("intro", "typed") != "typed":
-            return self._intro_alt(sc, t, p)
+            return self._intro_alt(sc, t, p, photo)
         if lay == "intro":
-            out = fit_cover(sc.image, W, H, zoom=1.08 + 0.12 * p, focus=(0.5, 0.35)).convert("RGBA")
+            out = fit_cover(photo, W, H, zoom=(1.0 if sc.clip is not None else 1.08 + 0.12 * p), focus=(0.5, 0.35)).convert("RGBA")
             out.alpha_composite(Image.new("RGBA", (W, H), (*hex2rgb(self.th.get("bg_edge", "#061915")), 150)))
             out.alpha_composite(self.vignette)
             spoken = [w for w in sc.words if w.start <= t + 0.05]
@@ -215,6 +218,10 @@ class LivreTemplate(OuroTemplate):
             return out
 
         z, foc, rot = fx.motion_params(pl.motion, p, pl.focus)
+        if lay == "full" and sc.clip is not None:
+            out = fit_cover(photo, W, H).convert("RGBA")  # a própria filmagem já tem movimento
+            out.alpha_composite(self.vignette)
+            return out
         if lay == "full":
             out = fit_cover(sc.image, W, H, zoom=z * 1.02, focus=foc).convert("RGBA")
             out.alpha_composite(self.vignette)
@@ -238,7 +245,7 @@ class LivreTemplate(OuroTemplate):
             paste(out, img, (acx - img.width / 2, acy - img.height / 2 + 10 * k * math.sin(t * 1.5)))
         return out
 
-    def _intro_alt(self, sc: SceneT, t: float, p: float) -> Image.Image:
+    def _intro_alt(self, sc: SceneT, t: float, p: float, photo: Image.Image | None = None) -> Image.Image:
         """Aberturas alternativas: 'words' (palavra por palavra gigante), 'band' (faixa de cinema), 'punch' (zoom com flash)."""
         W, H, k = self.W, self.H, self.k
         style = self.lk.get("intro")
@@ -249,7 +256,7 @@ class LivreTemplate(OuroTemplate):
             z = 1.08 + 0.32 * (1 - ease_out_cubic(clamp((t - sc.start) / 0.6))) + 0.06 * p
         else:
             z = 1.1 + 0.1 * p
-        out = fit_cover(sc.image, W, H, zoom=z, focus=(0.5, 0.38)).convert("RGBA")
+        out = fit_cover(photo or sc.image, W, H, zoom=(1.0 if sc.clip is not None else z), focus=(0.5, 0.38)).convert("RGBA")
         out.alpha_composite(Image.new("RGBA", (W, H), (*edge, 120 if style == "band" else 140)))
         out.alpha_composite(self.vignette)
         d = ImageDraw.Draw(out)
