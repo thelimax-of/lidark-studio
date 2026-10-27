@@ -106,7 +106,7 @@ def sync_profile(channel_id: int) -> dict[str, Any]:
         ch.avatar_url = _cache_image(avatar, ch.slug, "avatar.jpg") or ch.avatar_url
         ch.banner_url = _cache_image(banner + "=w1280-fcrop64=1,00000000ffffffff" if banner else "", ch.slug, "banner.jpg") or ch.banner_url
         ch.yt_description = sn.get("description", "")
-        ch.stats = {"subscribers": int(st.get("subscriberCount", 0)), "views": int(st.get("viewCount", 0)),
+        ch.stats = {**(ch.stats or {}), "subscribers": int(st.get("subscriberCount", 0)), "views": int(st.get("viewCount", 0)),
                     "videos": int(st.get("videoCount", 0)), "country": sn.get("country", ""),
                     "uploads": item.get("contentDetails", {}).get("relatedPlaylists", {}).get("uploads", "")}
         ch.synced_at = now()

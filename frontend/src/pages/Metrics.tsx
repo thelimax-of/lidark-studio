@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Area, AreaChart, CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { BarChart3, Sparkles, ExternalLink, ArrowUpDown } from 'lucide-react'
-import { api, invalidate, useApi } from '../api'
-import { act, Empty, fmtNum, PageHeader, useChannel } from '../ui'
+import { BarChart3, Sparkles, ExternalLink, ArrowUpDown, RefreshCw } from 'lucide-react'
+import { api, invalidate, onJob, useApi, type Job } from '../api'
+import { act, Empty, fmtNum, PageHeader, toast, useChannel } from '../ui'
 import { ExperimentsCard, YppCard } from './Growth'
 
 type Row = {
@@ -17,6 +17,18 @@ export default function Metrics() {
   const cid = channel?.id
   const [days, setDays] = useState(28)
   const [sort, setSort] = useState<keyof Row>('perf')
+  const [syncJob, setSyncJob] = useState<number | null>(null)
+  useEffect(() => onJob(j => {
+    if (j.id !== syncJob || !['done', 'failed', 'cancelled'].includes(j.status)) return
+    setSyncJob(null)
+    invalidate('/channels')
+    if (j.status === 'done') toast.ok('Métricas sincronizadas')
+    else if (j.status === 'failed') toast.err(`Falha ao sincronizar: ${j.error || 'erro desconhecido'}`)
+  }), [syncJob])
+  const sync = async () => {
+    const j = await act(() => api<Job>(`/channels/${cid}/metrics/sync`, { body: {} }), 'Sincronizando com o YouTube…')
+    if (j) setSyncJob(j.id)
+  }
   const { data: rows = [] } = useApi<Row[]>(cid ? `/channels/${cid}/performance` : null)
   const { data: daily } = useApi<{ rows: { day: string; views: number; minutes: number; subs: number; likes: number }[]; connected: boolean; error?: string }>(cid ? `/channels/${cid}/analytics?days=${days}` : null)
   const { data: insights = [] } = useApi<{ text: string; kind?: string }[]>(cid ? `/channels/${cid}/insights` : null)
@@ -33,8 +45,12 @@ export default function Metrics() {
   return (
     <>
       <PageHeader title="Métricas" subtitle={`${channel.name} · dados do YouTube Analytics (atualizados a cada 6 h)`}
-        actions={<div className="seg">
-          {[7, 28, 90].map(n => <button key={n} onClick={() => setDays(n)} data-active={days === n}>{n} dias</button>)}
+        actions={<div className="flex items-center gap-2">
+          {channel.connected && <button className="btn" onClick={sync} disabled={syncJob !== null}>
+            <RefreshCw size={15} className={syncJob !== null ? 'animate-spin' : ''} /> {syncJob !== null ? 'Sincronizando…' : 'Sincronizar'}</button>}
+          <div className="seg">
+            {[7, 28, 90].map(n => <button key={n} onClick={() => setDays(n)} data-active={days === n}>{n} dias</button>)}
+          </div>
         </div>} />
 
       <div className="space-y-5 mb-6"><YppCard channelId={channel.id} /><ExperimentsCard channelId={channel.id} /></div>

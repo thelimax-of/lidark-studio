@@ -644,6 +644,16 @@ def import_youtube(cid: int, data: dict[str, Any], s: Session = Depends(get_sess
                                       payload={"handle": data["handle"]}))
 
 
+@router.post("/channels/{cid}/metrics/sync")
+def channel_metrics_sync(cid: int, s: Session = Depends(get_session)):
+    ch = _get(s, Channel, cid)
+    busy = s.exec(select(Job).where(Job.kind == "collect_metrics", Job.status.in_(("queued", "running")),
+                                    (Job.channel_id == cid) | (Job.channel_id == None))).first()  # noqa: E711
+    if busy:
+        return jobs.job_dict(busy)
+    return jobs.job_dict(jobs.enqueue("collect_metrics", title=f"Sincronizar métricas: {ch.name}", channel_id=cid))
+
+
 @router.get("/channels/{cid}/performance")
 def channel_performance(cid: int):
     from .analytics import performance_table
