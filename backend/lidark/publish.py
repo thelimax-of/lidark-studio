@@ -1,0 +1,344 @@
+"""Publicação e métricas no YouTube (Data API v3 + Analytics API).
+
+Conexão: OAuth "app para computador" com retorno em http://localhost:8765/api/oauth/youtube/callback
+"""
+from __future__ import annotations
+
+import json
+import logging
+import secrets
+from datetime import datetime, timezone
+from typing import Any
+
+from fastapi import HTTPException
+from sqlmodel import select
+
+from .config import MEDIA_DIR, SECRETS_DIR
+from .db import session
+from .jobs import JobContext, handler
+from .models import Account, Channel, Insight, MetricSnapshot, Publication, Script, Video, now
+
+log = logging.getLogger("lidark.publish")
+
+YT_SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube",  # playlists das séries
+    "https://www.googleapis.com/auth/youtube.force-ssl",  # responder comentários e ligar Shorts ↔ longos
+    "https://www.googleapis.com/auth/youtube.readonly",
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
+]
+YT_REDIRECT = "http://localhost:8765/api/oauth/youtube/callback"
+_pending: dict[str, dict[str, Any]] = {}  # state → {platform, channel_id, verifier}
+
+
+# ================================================================ conexão
+
+def start_connect(platform: str, channel_id: int | None = None) -> dict:
+    if platform == "youtube":
+        return _yt_start(channel_id)
+    raise HTTPException(400, "Plataforma não suportada")
+
+
+# ---------------------------------------------------------------- YouTube
+
+def _yt_flow(state: str | None = None):
+    from google_auth_oauthlib.flow import Flow
+    cs = SECRETS_DIR / "client_secret.json"
+    if not cs.exists():
+        raise HTTPException(400, "Coloque o client_secret.json do Google Cloud em data/secrets/")
+    flow = Flow.from_client_secrets_file(str(cs), scopes=YT_SCOPES, state=state)
+    flow.redirect_uri = YT_REDIRECT
+    return flow
+
+
+def _yt_start(channel_id: int | None) -> dict:
+    state = secrets.token_urlsafe(16)
+    flow = _yt_flow(state)
+    url, _ = flow.authorization_url(access_type="offline", prompt="consent", include_granted_scopes="true")
+    _pending[state] = {"platform": "youtube", "channel_id": channel_id, "verifier": getattr(flow, "code_verifier", None)}
+    return {"auth_url": url}
+
+
+def yt_callback(state: str, code: str) -> str:
+    import os
+    os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")  # retorno local em http://localhost
+    os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
+    info = _pending.pop(state, None)
+    if not info:
+        raise HTTPException(400, "Sessão de login expirada — tente conectar de novo")
+    flow = _yt_flow(state)
+    if info.get("verifier"):
+        flow.code_verifier = info["verifier"]
+    flow.fetch_token(code=code)
+    creds = flow.credentials
+    yt = _yt_client(json.loads(creds.to_json()))
+    me = yt.channels().list(part="snippet,statistics", mine=True).execute()
+    item = (me.get("items") or [{}])[0]
+    if not item.get("id"):
+        raise HTTPException(400, "Essa conta Google não tem canal no YouTube — escolha o canal na tela de login")
+    name = item.get("snippet", {}).get("title", "YouTube")
+    from .channels import attach_or_create
+    from .jobs import enqueue
+    channel_id, created = attach_or_create(item, info.get("channel_id"))
+    with session() as s:
+        acc = s.exec(select(Account).where(Account.channel_id == channel_id, Account.platform == "youtube")).first()
+        if not acc:
+            acc = Account(channel_id=channel_id, platform="youtube")
+        acc.display_name, acc.external_id = name, item["id"]
+        acc.credentials = json.loads(creds.to_json())
+        acc.connected_at = now()
+        s.add(acc)
+        s.commit()
+    enqueue("setup_channel", title=f"{'Configurar' if created else 'Sincronizar'} canal: {name}", channel_id=channel_id)
+    return name
+
+
+def _yt_client(creds_json: dict, api: str = "youtube", version: str = "v3"):
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+    creds = Credentials.from_authorized_user_info({k: v for k, v in creds_json.items() if not k.startswith("_")})
+    return build(api, version, credentials=creds, cache_discovery=False)
+
+
+def _yt_creds(acc: Account) -> dict:
+    if not acc.credentials:
+        raise RuntimeError("Conta do YouTube importada sem login — conecte em Canais → Contas")
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+    extra = {k: v for k, v in acc.credentials.items() if k.startswith("_")}
+    c = Credentials.from_authorized_user_info({k: v for k, v in acc.credentials.items() if not k.startswith("_")})
+    if not c.valid and c.refresh_token:
+        c.refresh(Request())
+        with session() as s:
+            a = s.get(Account, acc.id)
+            a.credentials = {**json.loads(c.to_json()), **extra}
+            s.add(a)
+            s.commit()
+    return json.loads(c.to_json())
+
+
+def yt_upload(acc: Account, pub: Publication, video: Video, sc: Script, ch: Channel, ctx: JobContext) -> tuple[str, str]:
+    from googleapiclient.http import MediaFileUpload
+    yt = _yt_client(_yt_creds(acc))
+    title = pub.title[:95]
+    tags = list(dict.fromkeys(sc.tags or []))[:25]
+    hashtags = " ".join(dict.fromkeys((sc.hashtags or []) + (ch.default_hashtags or [])))
+    if video.format == "short" and "#shorts" not in (title + hashtags).lower():
+        hashtags = "#Shorts " + hashtags
+    desc = _description(pub.description or sc.description, sc, video, hashtags)
+    body = {
+        "snippet": {"title": title, "description": desc[:4900], "tags": tags, "categoryId": "27",
+                    "defaultLanguage": "pt-BR", "defaultAudioLanguage": "pt-BR"},
+        "status": {"privacyStatus": pub.privacy, "selfDeclaredMadeForKids": False,
+                   "containsSyntheticMedia": True},
+    }
+    media = MediaFileUpload(str(MEDIA_DIR / video.path), chunksize=8 * 1024 * 1024, resumable=True, mimetype="video/mp4")
+    req = yt.videos().insert(part="snippet,status", body=body, media_body=media)
+    resp = None
+    while resp is None:
+        status, resp = req.next_chunk()
+        if status:
+            ctx.update(0.1 + 0.8 * status.progress(), f"Enviando ao YouTube {int(status.progress() * 100)}%")
+    vid = resp["id"]
+    if video.thumbnail_path:
+        try:
+            yt.thumbnails().set(videoId=vid, media_body=MediaFileUpload(str(MEDIA_DIR / video.thumbnail_path),
+                                                                        mimetype="image/jpeg")).execute()
+            ctx.log("Miniatura enviada")
+        except Exception as e:  # noqa: BLE001
+            msg = str(e)
+            if "verif" in msg.lower() or "forbidden" in msg.lower():
+                msg = "o canal precisa ser verificado por telefone em youtube.com/verify para aceitar miniaturas"
+            ctx.log(f"Miniatura não enviada: {msg}")
+    series = (sc.variety or {}).get("series")
+    if series:
+        try:
+            _add_to_series(yt, acc, ch, series, vid, ctx)
+        except Exception as e:  # noqa: BLE001
+            ctx.log(f"Playlist da série não atualizada: {e}")
+    url = f"https://youtube.com/shorts/{vid}" if video.format == "short" else f"https://youtu.be/{vid}"
+    return vid, url
+
+
+def _add_to_series(yt, acc: Account, ch: Channel, series: str, vid: str, ctx: JobContext) -> None:
+    """Coloca o vídeo na playlist da série (cria a playlist na primeira vez)."""
+    scopes = (acc.credentials or {}).get("scopes") or []
+    if "https://www.googleapis.com/auth/youtube" not in scopes:
+        ctx.log("Playlists: reconecte o canal (Canais → Reconectar) para liberar a permissão de playlists")
+        return
+    with session() as s:
+        playlists = dict((s.get(Channel, ch.id).playlists or {}))
+    pid = playlists.get(series)
+    if not pid:
+        body = {"snippet": {"title": series, "description": f"Série do canal {ch.name}: {series}.",
+                            "defaultLanguage": "pt-BR"}, "status": {"privacyStatus": "public"}}
+        pid = yt.playlists().insert(part="snippet,status", body=body).execute()["id"]
+        with session() as s:
+            db = s.get(Channel, ch.id)
+            db.playlists = {**(db.playlists or {}), series: pid}
+            s.add(db)
+            s.commit()
+        ctx.log(f"Playlist criada: {series}")
+    yt.playlistItems().insert(part="snippet", body={"snippet": {"playlistId": pid, "resourceId": {
+        "kind": "youtube#video", "videoId": vid}}}).execute()
+    ctx.log(f"Adicionado à série “{series}”")
+
+
+def yt_metrics(acc: Account, pubs: list[Publication]) -> dict[str, dict[str, Any]]:
+    ids = [p.external_id for p in pubs if p.external_id]
+    out: dict[str, dict[str, Any]] = {}
+    if not ids or not acc.credentials:
+        return out
+    creds = _yt_creds(acc)
+    yt = _yt_client(creds)
+    for i in range(0, len(ids), 50):
+        r = yt.videos().list(part="statistics", id=",".join(ids[i:i + 50])).execute()
+        for it in r.get("items", []):
+            st = it.get("statistics", {})
+            out[it["id"]] = {"views": int(st.get("viewCount", 0)), "likes": int(st.get("likeCount", 0)),
+                             "comments": int(st.get("commentCount", 0))}
+    try:
+        ya = _yt_client(creds, "youtubeAnalytics", "v2")
+        wanted = set(ids)
+        rep = ya.reports().query(
+            ids="channel==MINE", startDate="2015-01-01", endDate=datetime.now(timezone.utc).date().isoformat(),
+            metrics="views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,subscribersGained,shares",
+            dimensions="video", sort="-views", maxResults=200).execute()
+        for row in rep.get("rows", []) or []:
+            vid, _v, mins, avd, avp, subs, shares = row
+            if vid in wanted:
+                out.setdefault(vid, {}).update({"watch_time_minutes": mins, "avg_view_duration": avd,
+                                                "avg_view_percentage": avp, "subscribers_gained": subs, "shares": shares})
+    except Exception as e:  # noqa: BLE001
+        log.warning("YouTube Analytics: %s", e)
+    return out
+
+
+# ================================================================ textos
+
+def _description(desc: str, sc: Script, video: Video, hashtags: str) -> str:
+    parts = [desc.strip()]
+    if (sc.variety or {}).get("from_long"):
+        parts.insert(0, f"▶ Vídeo completo: {sc.variety['from_long']}")
+    chapters = (video.assets or {}).get("chapters") or []
+    if len(chapters) >= 3:
+        fmt = lambda x: f"{int(x // 3600)}:{int(x % 3600 // 60):02d}:{int(x % 60):02d}" if x >= 3600 else f"{int(x // 60)}:{int(x % 60):02d}"  # noqa: E731
+        parts.append("Capítulos:\n" + "\n".join(f"{fmt(c['start'])} {c['title']}" for c in chapters))
+    srcs = [s.get("url") for s in (sc.sources or []) if s.get("url")][:6]
+    if srcs and "Fontes" not in desc:
+        parts.append("Fontes:\n" + "\n".join(f"• {u}" for u in srcs))
+    # sem créditos de imagem/música: o sistema só usa mídia que dispensa atribuição
+    parts.append(hashtags)
+    return "\n\n".join(p for p in parts if p)
+
+
+# ================================================================ tarefas
+
+UPLOADERS = {"youtube": yt_upload}
+METRICS = {"youtube": yt_metrics}
+
+
+@handler("publish")
+def job_publish(ctx: JobContext) -> dict:
+    with session() as s:
+        pub = s.get(Publication, ctx.ref_id)
+        acc = s.get(Account, pub.account_id)
+        video = s.get(Video, pub.video_id)
+        sc = s.get(Script, video.script_id)
+        ch = s.get(Channel, pub.channel_id)
+        qa = (video.assets or {}).get("qa") or {}
+        if qa and not qa.get("passed") and not ctx.payload.get("force"):
+            pub.status, pub.error = "failed", "Vídeo reprovado no inspetor de qualidade (aprove manualmente em Vídeos)"
+            s.add(pub)
+            s.commit()
+            raise RuntimeError(pub.error)
+        pub.status = "uploading"
+        s.add(pub)
+        s.commit()
+    ctx.update(0.05, f"Publicando no {acc.platform}")
+    try:
+        ext, url = UPLOADERS[acc.platform](acc, pub, video, sc, ch, ctx)
+    except Exception as e:
+        with session() as s:
+            p = s.get(Publication, pub.id)
+            p.status, p.error = "failed", str(e)[:2000]
+            s.add(p)
+            s.commit()
+        raise
+    with session() as s:
+        p = s.get(Publication, pub.id)
+        p.status, p.external_id, p.url, p.published_at, p.error = "published", ext, url, now(), ""
+        s.add(p)
+        v = s.get(Video, video.id)
+        v.status = "published"
+        s.add(v)
+        s.commit()
+    ctx.log(f"Publicado: {url or ext}")
+    if acc.platform == "youtube":
+        from .community import after_publish
+        after_publish(pub.id, pub.channel_id)
+        if video.format == "long" and not (sc.variety or {}).get("from_long"):
+            from .jobs import enqueue
+            enqueue("shorts_from_long", title=f"Shorts a partir do longo: {pub.title[:60]}", channel_id=pub.channel_id,
+                    ref_id=video.id)
+    return {"url": url, "id": ext}
+
+
+@handler("collect_metrics")
+def job_collect_metrics(ctx: JobContext) -> dict:
+    from .analytics import generate_insights
+    with session() as s:
+        accs = s.exec(select(Account)).all()
+    total = 0
+    for n, acc in enumerate(accs):
+        if not acc.credentials or acc.platform not in METRICS:
+            continue
+        with session() as s:
+            pubs = s.exec(select(Publication).where(Publication.account_id == acc.id,
+                                                    Publication.status == "published")).all()
+        if acc.platform == "youtube":
+            # vídeos importados (sem login) do mesmo canal passam a ser medidos pela conta conectada
+            with session() as s:
+                pubs += s.exec(select(Publication).where(Publication.channel_id == acc.channel_id,
+                                                         Publication.platform == "youtube",
+                                                         Publication.account_id != acc.id,
+                                                         Publication.status == "published")).all()
+        ctx.update(n / max(1, len(accs)), f"Coletando métricas: {acc.platform} {acc.display_name}")
+        try:
+            data = METRICS[acc.platform](acc, pubs)
+        except Exception as e:  # noqa: BLE001
+            ctx.log(f"{acc.platform}: {e}")
+            continue
+        if acc.platform == "youtube":  # curva de retenção segundo a segundo
+            from .retention import collect_curves
+            for vid_id, curve in collect_curves(acc, pubs).items():
+                data.setdefault(vid_id, {})["retention_curve"] = curve
+        with session() as s:
+            for p in pubs:
+                m = data.get(p.external_id)
+                if not m:
+                    continue
+                s.add(MetricSnapshot(publication_id=p.id, channel_id=p.channel_id, platform=p.platform,
+                                     **{k: v for k, v in m.items() if k in MetricSnapshot.model_fields}, raw=m))
+                total += 1
+            s.commit()
+    ctx.log(f"{total} leituras de métricas salvas")
+    with session() as s:
+        chans = [c.id for c in s.exec(select(Channel)).all()]
+    from .retention import generate_retention_insights
+    for cid in chans:
+        try:
+            with session() as s:
+                last = s.exec(select(Insight).where(Insight.channel_id == cid, Insight.kind == "retention")
+                              .order_by(Insight.created_at.desc())).first()
+            if not last or (now() - last.created_at.replace(tzinfo=now().tzinfo)).total_seconds() > 20 * 3600:
+                lessons = generate_retention_insights(cid)
+                if lessons:
+                    ctx.log(f"Canal {cid}: {len(lessons)} lições de retenção atualizadas")
+        except Exception as e:  # noqa: BLE001
+            ctx.log(f"Retenção canal {cid}: {e}")
+        try:
+            generate_insights(cid, min_hours=20)
+        except Exception as e:  # noqa: BLE001
+            ctx.log(f"Aprendizados canal {cid}: {e}")
+    return {"snapshots": total}

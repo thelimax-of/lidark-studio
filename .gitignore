@@ -1,0 +1,21 @@
+# dados, mídia, chaves e tokens — NUNCA vão para o GitHub (o backup deles vai para o Google Drive)
+data/
+*.db
+*.db-*
+*.log
+settings.json
+client_secret*.json
+
+# ambientes e builds (recriados com pip install / npm install / npm run build)
+backend/.venv/
+frontend/node_modules/
+frontend/dist/
+__pycache__/
+*.pyc
+.env
+.env.*
+
+# sistema
+.DS_Store
+Thumbs.db
+desktop.ini
