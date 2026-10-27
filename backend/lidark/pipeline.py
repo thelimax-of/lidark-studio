@@ -257,6 +257,7 @@ def job_write_script(ctx: JobContext) -> dict:
     ctx.update(0.6, "Editor-chefe revisando e checando fatos")
     _review(ch, sc.id, ctx, auto_fix=True)
     _ensure_length(ch, sc.id, ctx)
+    _check_claims(ch, sc.id, ctx)
     if ctx.payload.get("auto_render"):
         enqueue("render_video", title=f"Vídeo: {sc.title}", channel_id=ch.id, ref_id=sc.id,
                 payload={k: ctx.payload[k] for k in ("publish_at",) if ctx.payload.get(k)})
@@ -276,6 +277,42 @@ def _ensure_length(ch: Channel, script_id: int, ctx: JobContext) -> None:
             s.add(db)
             s.commit()
         ctx.log(f"Roteiro final: {len(scenes)} cenas, {content.count_words(scenes)} palavras")
+
+
+def _check_claims(ch: Channel, script_id: int, ctx: JobContext) -> None:
+    """Checagem frase a frase. Só roda de novo se o texto mudou desde a última (ex.: roteiro editado à mão)."""
+    with session() as s:
+        sc = s.get(Script, script_id)
+        idea = s.get(Idea, sc.idea_id) if sc.idea_id else None
+    if (sc.claims or {}).get("sig") == content.scenes_sig(sc.scenes):
+        return
+    ctx.update(None, "Checando os fatos frase por frase")
+    try:
+        r = content.check_claims(ch, sc, idea)
+    except Exception as e:  # noqa: BLE001
+        ctx.log(f"Checagem frase a frase não rodou ({e}) — siga com atenção ao revisar")
+        return
+    scenes = [dict(x) for x in sc.scenes]
+    for i, txt in r["fixes"].items():
+        words = set(txt.lower().split())
+        scenes[i] = {**scenes[i], "text": txt,
+                     "emphasis": [e for e in scenes[i].get("emphasis") or [] if str(e).lower() in words]}
+    items = r["items"]
+    bad = [c for c in items if c.get("verdict") in ("sem_fonte", "contradiz")]
+    fixed_scenes = {i + 1 for i in r["fixes"]}
+    with session() as s:
+        db = s.get(Script, script_id)
+        db.scenes = scenes
+        db.claims = {"sig": content.scenes_sig(scenes), "items": items, "fixed": len(r["fixes"]),
+                     "unresolved": [c for c in bad if c.get("scene") not in fixed_scenes], "sources": r["sources"]}
+        s.add(db)
+        s.commit()
+    ok = len(items) - len(bad)
+    ctx.log(f"Fatos: {ok}/{len(items)} afirmações confirmadas nas fontes"
+            + (f" · {len(r['fixes'])} cena(s) corrigida(s)" if r["fixes"] else ""))
+    for c in bad:
+        ctx.log(f"  ✗ cena {c.get('scene')}: “{c.get('claim')}” ({c.get('verdict')})"
+                + (" → corrigida" if c.get("scene") in fixed_scenes else " → SEM CORREÇÃO, revise"))
 
 
 def _review(ch: Channel, script_id: int, ctx: JobContext, auto_fix: bool) -> None:
@@ -315,10 +352,20 @@ def job_render(ctx: JobContext) -> dict:
     with session() as s:
         sc = s.get(Script, ctx.ref_id)
         ch = s.get(Channel, sc.channel_id)
-        video = Video(channel_id=ch.id, script_id=sc.id, format=sc.format, status="rendering")
-        s.add(video)
-        s.commit()
-        s.refresh(video)
+        old = s.get(Video, ctx.payload["_video_id"]) if ctx.payload.get("_video_id") else None
+        if old and old.status == "rendering":  # retomando depois de um reinício: mesma pasta, etapas já feitas
+            video = old
+        else:
+            video = Video(channel_id=ch.id, script_id=sc.id, format=sc.format, status="rendering")
+            s.add(video)
+            s.commit()
+            s.refresh(video)
+    if old is video:
+        ctx.log(f"Retomando o vídeo #{video.id} (etapas prontas são reaproveitadas)")
+    ctx.save_payload(_video_id=video.id)
+    _check_claims(ch, sc.id, ctx)
+    with session() as s:
+        sc = s.get(Script, ctx.ref_id)
     from .jobs import Cancelled
     try:
         out = produce_video(ch, sc, video.id, ctx)

@@ -80,6 +80,11 @@ def yt_callback(state: str, code: str) -> str:
     from .channels import attach_or_create
     from .jobs import enqueue
     channel_id, created = attach_or_create(item, info.get("channel_id"))
+    if created:  # canal planejado no assistente "Novo canal"? aplica a identidade pronta antes da configuração
+        from .brandwizard import apply_draft, find_draft_for
+        draft = find_draft_for(name, item.get("snippet", {}).get("customUrl", ""))
+        if draft:
+            apply_draft(draft.id, channel_id)
     with session() as s:
         acc = s.exec(select(Account).where(Account.channel_id == channel_id, Account.platform == "youtube")).first()
         if not acc:
@@ -127,7 +132,7 @@ def yt_upload(acc: Account, pub: Publication, video: Video, sc: Script, ch: Chan
         hashtags = "#Shorts " + hashtags
     desc = _description(pub.description or sc.description, sc, video, hashtags)
     body = {
-        "snippet": {"title": title, "description": desc[:4900], "tags": tags, "categoryId": "27",
+        "snippet": {"title": title, "description": desc[:4900], "tags": tags, "categoryId": ch.yt_category or "27",
                     "defaultLanguage": "pt-BR", "defaultAudioLanguage": "pt-BR"},
         "status": {"privacyStatus": pub.privacy, "selfDeclaredMadeForKids": False,
                    "containsSyntheticMedia": True},
@@ -149,7 +154,11 @@ def yt_upload(acc: Account, pub: Publication, video: Video, sc: Script, ch: Chan
             msg = str(e)
             if "verif" in msg.lower() or "forbidden" in msg.lower():
                 msg = "o canal precisa ser verificado por telefone em youtube.com/verify para aceitar miniaturas"
+                _set_thumbs_blocked(ch.id, True)  # próximos vídeos longos ganham a capa no 1º quadro
             ctx.log(f"Miniatura não enviada: {msg}")
+        else:
+            if ch.thumbs_blocked:
+                _set_thumbs_blocked(ch.id, False)
     series = (sc.variety or {}).get("series")
     if series:
         try:
@@ -216,6 +225,15 @@ def yt_metrics(acc: Account, pubs: list[Publication]) -> dict[str, dict[str, Any
 
 # ================================================================ textos
 
+def _set_thumbs_blocked(channel_id: int, blocked: bool) -> None:
+    with session() as s:
+        c = s.get(Channel, channel_id)
+        if c and c.thumbs_blocked != blocked:
+            c.thumbs_blocked = blocked
+            s.add(c)
+            s.commit()
+
+
 def _description(desc: str, sc: Script, video: Video, hashtags: str) -> str:
     parts = [desc.strip()]
     if (sc.variety or {}).get("from_long"):
@@ -227,7 +245,19 @@ def _description(desc: str, sc: Script, video: Video, hashtags: str) -> str:
     srcs = [s.get("url") for s in (sc.sources or []) if s.get("url")][:6]
     if srcs and "Fontes" not in desc:
         parts.append("Fontes:\n" + "\n".join(f"• {u}" for u in srcs))
-    # sem créditos de imagem/música: o sistema só usa mídia que dispensa atribuição
+    # créditos só das fotos que exigem atribuição (CC BY/BY-SA, em canais que aceitam); o resto dispensa
+    from .visuals import FREE_MARKERS
+    need = []
+    for p in (video.assets or {}).get("images") or []:
+        if not isinstance(p, dict) or p.get("kind") != "real" or p.get("source") in ("nasa", "pexels", "cleveland", "smithsonian"):
+            continue
+        lic = (p.get("license") or "").lower()
+        if lic and not any(m in lic for m in FREE_MARKERS):
+            line = f"• {p.get('credit') or 'Autor desconhecido'} — {p.get('license')} — {p.get('page') or p.get('url')}"
+            if line not in need:
+                need.append(line)
+    if need:
+        parts.append("Créditos das imagens:\n" + "\n".join(need[:15]))
     parts.append(hashtags)
     return "\n\n".join(p for p in parts if p)
 

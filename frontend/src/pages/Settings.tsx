@@ -78,6 +78,8 @@ export default function Settings() {
             <div className="text-sm flex justify-between"><span className="text-muted">FFmpeg</span><span className="truncate max-w-[60%] text-right">{health?.ffmpeg?.path?.split(/[\\/]/).pop()}</span></div>
             <div className="text-sm flex justify-between"><span className="text-muted">Aceleração NVIDIA (NVENC)</span><span className={health?.ffmpeg?.nvenc ? 'text-ok' : 'text-warn'}>{health?.ffmpeg?.nvenc ? 'Ativa ✓' : 'Indisponível'}</span></div>
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.use_nvenc} onChange={e => set('use_nvenc', e.target.checked)} /> Usar GPU para codificar</label>
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!f.trend_radar_enabled} onChange={e => set('trend_radar_enabled', e.target.checked)} /> Radar de tendências diário (7h) cria pautas sozinho</label>
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!f.auto_ideas_on_setup} onChange={e => set('auto_ideas_on_setup', e.target.checked)} /> Canal recém-conectado ganha 8 pautas automaticamente</label>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Modelo Whisper (legendas)">
                 <select className="input" value={f.whisper_model} onChange={e => set('whisper_model', e.target.value)}>

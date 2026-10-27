@@ -32,6 +32,8 @@ DEFAULTS: dict[str, Any] = {
     "glm_api_key": "",
     "glm_base_url": "https://api.z.ai/api/paas/v4",
     "glm_model": "glm-4.5-flash",
+    "trend_radar_enabled": True,  # radar diário das 7h (cria pautas sozinho)
+    "auto_ideas_on_setup": True,  # canal recém-conectado ganha 8 pautas automaticamente
     "footage_enabled": False,  # filmagens reais nas cenas (experimental, desligado)
     "ntfy_enabled": False,  # avisos no celular (app ntfy)
     "ntfy_server": "https://ntfy.sh",

@@ -271,9 +271,40 @@ def _lum(h: str) -> float:
     return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
 
-def _apply_identity(channel_id: int, d: dict[str, Any], parts: str) -> None:
+def theme_from_identity(d: dict[str, Any], base: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Tema visual (paleta com garantias de contraste, mascote, fontes, textos) a partir da resposta da IA."""
     from .render.characters import KINDS
     from .seed import OURO_THEME
+    th = dict(OURO_THEME)
+    th.update(base or {})
+    pal = d.get("palette") or {}
+    for k in PALETTE_KEYS:
+        th[k] = _hex(pal.get(k), th.get(k, OURO_THEME.get(k, "#888888")))
+    # garantias de contraste
+    if _lum(th["card"]) < 0.6:
+        th["card"], th["card_edge"] = OURO_THEME["card"], OURO_THEME["card_edge"]
+    if _lum(th["ink"]) > 0.3:
+        th["ink"] = "#14161a"
+    if _lum(th["bg_center"]) > 0.35:
+        th["bg_center"], th["bg_edge"] = "#1b2430", "#0b0f14"
+    if _lum(th["caption_bg"]) > 0.25:
+        th["caption_bg"] = "#121417"
+    th["stamp_myth"] = _hex(d.get("stamp_myth"), "#b8322a")
+    th["stamp_truth"] = _hex(d.get("stamp_truth"), "#1d7a45")
+    th["mascot"] = d.get("mascot") if d.get("mascot") in KINDS else th.get("mascot", "bulb")
+    th["mascot_color"] = _hex(d.get("mascot_color"), th.get("mascot_color", ""))
+    th["mascot_accent"] = _hex(d.get("mascot_accent"), th.get("mascot_accent", ""))
+    if d.get("font_title") in FONTS:
+        th["font_title"] = d["font_title"]
+    if d.get("font_caption") in CAPTION_FONTS:
+        th["font_caption"] = d["font_caption"]
+    for k in ("slogan", "outro_title", "step_label", "logo_letter"):
+        if d.get(k):
+            th[k] = str(d[k])[:40] if k != "logo_letter" else str(d[k])[:1].upper()
+    return th
+
+
+def _apply_identity(channel_id: int, d: dict[str, Any], parts: str) -> None:
     with session() as s:
         ch = s.get(Channel, channel_id)
         if parts in ("all", "text"):
@@ -294,32 +325,7 @@ def _apply_identity(channel_id: int, d: dict[str, Any], parts: str) -> None:
             except (TypeError, ValueError):
                 pass
         if parts in ("all", "visual"):
-            th = dict(OURO_THEME)
-            th.update(ch.theme or {})
-            pal = d.get("palette") or {}
-            for k in PALETTE_KEYS:
-                th[k] = _hex(pal.get(k), th.get(k, OURO_THEME.get(k, "#888888")))
-            # garantias de contraste
-            if _lum(th["card"]) < 0.6:
-                th["card"], th["card_edge"] = OURO_THEME["card"], OURO_THEME["card_edge"]
-            if _lum(th["ink"]) > 0.3:
-                th["ink"] = "#14161a"
-            if _lum(th["bg_center"]) > 0.35:
-                th["bg_center"], th["bg_edge"] = "#1b2430", "#0b0f14"
-            if _lum(th["caption_bg"]) > 0.25:
-                th["caption_bg"] = "#121417"
-            th["stamp_myth"] = _hex(d.get("stamp_myth"), "#b8322a")
-            th["stamp_truth"] = _hex(d.get("stamp_truth"), "#1d7a45")
-            th["mascot"] = d.get("mascot") if d.get("mascot") in KINDS else th.get("mascot", "bulb")
-            th["mascot_color"] = _hex(d.get("mascot_color"), th.get("mascot_color", ""))
-            th["mascot_accent"] = _hex(d.get("mascot_accent"), th.get("mascot_accent", ""))
-            if d.get("font_title") in FONTS:
-                th["font_title"] = d["font_title"]
-            if d.get("font_caption") in CAPTION_FONTS:
-                th["font_caption"] = d["font_caption"]
-            for k in ("slogan", "outro_title", "step_label", "logo_letter"):
-                if d.get(k):
-                    th[k] = str(d[k])[:40] if k != "logo_letter" else str(d[k])[:1].upper()
+            th = theme_from_identity(d, ch.theme)
             th["handle"] = ch.handle or th.get("handle", "")
             ch.theme = th
             ch.color = th["gold"]
@@ -404,7 +410,11 @@ def job_setup_channel(ctx: JobContext) -> dict:
     ctx.update(0.2, "Importando vídeos e métricas")
     n = import_videos(cid, ctx)
     ctx.log(f"{n} vídeos novos importados")
-    if first_time or ctx.payload.get("identity"):
+    with session() as s:
+        drafted = bool((s.get(Channel, cid).theme or {}).get("_draft_applied"))
+    if drafted and not ctx.payload.get("identity"):
+        ctx.log("Identidade do assistente \"Novo canal\" já aplicada — a IA não mexe nela")
+    elif first_time or ctx.payload.get("identity"):
         ctx.update(0.65, "IA criando a identidade do canal")
         with session() as s:
             locked = bool((s.get(Channel, cid).theme or {}).get("_locked_visual"))
@@ -423,7 +433,8 @@ def job_setup_channel(ctx: JobContext) -> dict:
         ch.setup_status = "ready"
         s.add(ch)
         s.commit()
-    if first_time:
+    from . import config
+    if first_time and config.get("auto_ideas_on_setup"):
         enqueue("discover_ideas", title=f"Primeiras pautas: {ch.name}", channel_id=cid, payload={"count": 8})
     return {"imported": n}
 

@@ -60,6 +60,26 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
                 s_.add(db)
                 s_.commit()
 
+    # etapas prontas ficam salvas: se o servidor reiniciar no meio, o vídeo continua de onde parou
+    ck_path = workdir / "checkpoint.json"
+    try:
+        ck: dict[str, Any] = json.loads(ck_path.read_text(encoding="utf-8")) if ck_path.exists() else {}
+    except (OSError, ValueError):
+        ck = {}
+    import threading
+    ck_lock = threading.Lock()
+
+    def save_ck() -> None:
+        with ck_lock:
+            ck_path.write_text(json.dumps(ck, ensure_ascii=False, default=str), encoding="utf-8")
+
+    facts_hint = ""
+    if sc.idea_id:
+        from .models import Idea
+        with session() as s_:
+            idea = s_.get(Idea, sc.idea_id)
+        facts_hint = "; ".join(f.get("claim", "") for f in (idea.facts if idea else []) if f.get("verdict") == "confirmado")
+
     # 0) roteiro com o tamanho certo (também corrige roteiros antigos/editados) ------------
     raw = sc.scenes
     plan = sc.variety or {}
@@ -88,16 +108,21 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
         return v, audio_duration(v["path"])
 
     base_rate = plan.get("voice_rate") or ch.voice_rate
-    voice, narr_dur = record(base_rate)
     min_total = max(61.0, float(plan.get("seconds") or ch.short_seconds or 60) - 2) if vertical else float(ch.long_minutes or 6) * 60 * 0.9
-    for _ in range(2):  # narração real ainda curta → acrescenta conteúdo e regrava (nunca enche com tela final)
+    cached = ck.get("voice") if ck.get("voice_sig") == content.scenes_sig(scenes) else None
+    if cached and Path(cached["path"]).exists():
+        voice, narr_dur = cached, float(ck["narr_dur"])
+        ctx.log(f"Narração reaproveitada da etapa anterior ({narr_dur:.1f}s)")
+    else:
+        voice, narr_dur = record(base_rate)
+    for _ in range(0 if cached else 2):  # narração real ainda curta → acrescenta conteúdo e regrava (nunca enche com tela final)
         if narr_dur + OUTRO_SECONDS >= min_total:
             break
         wps = max(1.5, len(full_text.split()) / max(1.0, narr_dur))
         missing = int((min_total - narr_dur - OUTRO_SECONDS) * wps) + 6
         ctx.log(f"Narração curta ({narr_dur:.1f}s) — acrescentando ~{missing} palavras ao roteiro")
         try:
-            more = content.expand_script(ch, sc.title, expanded, missing)
+            more = content.expand_script(ch, sc.title, expanded, missing, facts_hint)
         except Exception as e:  # noqa: BLE001
             ctx.log(f"Expansão não funcionou: {e}")
             continue
@@ -107,11 +132,14 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
         full_text = " ".join(s["text"].strip() for s in scenes)
         voice, narr_dur = record(base_rate)
     gap = min_total - narr_dur - OUTRO_SECONDS
-    if 0 < gap <= narr_dur * 0.06 and voice.get("provider") == "edge":  # ajuste fino imperceptível (≤ 6%)
+    if not cached and 0 < gap <= narr_dur * 0.06 and voice.get("provider") == "edge":  # ajuste fino imperceptível (≤ 6%)
         cur = int((base_rate or "+0%").strip("%") or 0)
         new_rate = cur - int(gap / narr_dur * 100) - 1
         voice, narr_dur = record(f"{new_rate:+d}%")
         ctx.log(f"Ajuste fino de velocidade: {new_rate:+d}%")
+    if not cached:
+        ck.update(voice=voice, narr_dur=narr_dur, voice_sig=content.scenes_sig(scenes), picks={})
+        save_ck()
     ctx.log(f"Narração: {voice['provider']} / {voice['voice']} — {narr_dur:.1f}s ({len(full_text.split())} palavras)")
 
     # 2) tempo de cada palavra --------------------------------------------------
@@ -148,10 +176,12 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
     if used_urls:
         ctx.log(f"Evitando {len(used_urls)} imagens já usadas em vídeos recentes")
 
-    stats = {"hd": 0, "clips": 0}
-    import threading
+    stats = {"hd": 0, "clips": 0, "fallback_graphics": 0}
     clip_lock = threading.Lock()
     max_clips = 3 if vertical else 8  # filmagem é ouro, mas foto bem escolhida também segura — sem exagero
+    max_fallback = max(2, int(len(scenes) * 0.3))  # cenas que podem virar gráfico por falta de foto boa
+    footage_on = bool(ch.footage or config.get("footage_enabled"))
+    min_q = int(config.get("image_min_quality"))
 
     def _clip_slot() -> bool:
         with clip_lock:
@@ -160,8 +190,65 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
             stats["clips"] += 1
             return True
 
+    def _scene_key(s: dict[str, Any]) -> str:
+        import hashlib
+        return hashlib.sha1(json.dumps([s.get("text"), s.get("visual")], sort_keys=True, default=str).encode()).hexdigest()[:12]
+
+    def _usable(r: dict[str, Any] | None) -> bool:
+        if not r:
+            return False
+        if r.get("kind") == "graphic":
+            return True
+        return bool((r.get("clip") and Path(r["clip"]).exists()) or (r.get("path") and Path(r["path"]).exists()))
+
     def pick(i_s):
         i, s = i_s
+        prev = (ck.get("picks") or {}).get(str(i))
+        if prev and prev.get("key") == _scene_key(s) and _usable(prev.get("pick")):
+            done[0] += 1
+            if prev["pick"].get("url"):
+                used_urls.add(prev["pick"]["url"])
+            return prev["pick"]
+        r = _pick_fresh(i, s)
+        with ck_lock:
+            ck.setdefault("picks", {})[str(i)] = {"key": _scene_key(s), "pick": r}
+        save_ck()
+        return r
+
+    def _try_clip(i: int, s: dict[str, Any]) -> dict[str, Any] | None:
+        if not (footage_on and _clip_slot()):
+            return None
+        from . import footage
+        ws = scene_words[i] if i < len(scene_words) else []
+        need = (ws[-1].end - ws[0].start + 0.4) if ws else 4.0
+        try:
+            rv = footage.pick_scene_clip(s, context, need, (W, H), used_urls, log_fn=lambda m: ctx.log(f"Cena {i + 1}: {m}"))
+        except Exception as e:  # noqa: BLE001
+            rv = None
+            ctx.log(f"Cena {i + 1}: filmagem falhou ({e}) — usando foto")
+        if not rv:
+            with clip_lock:
+                stats["clips"] -= 1  # não achou: libera a vaga para outra cena
+        return rv
+
+    def _fallback_graphic(i: int, s: dict[str, Any]) -> dict[str, Any] | None:
+        with clip_lock:
+            if stats["fallback_graphics"] >= max_fallback:
+                return None
+            stats["fallback_graphics"] += 1
+        try:
+            v = content.scene_graphic(ch, sc.title, s, facts_hint)
+        except Exception as e:  # noqa: BLE001
+            v = None
+            ctx.log(f"Cena {i + 1}: gráfico de reserva falhou ({e})")
+        if v:
+            ctx.log(f"Cena {i + 1}: sem foto boa — virou gráfico animado ({v['kind']})")
+            return {"kind": "graphic", "graphic": v["kind"], "visual": v, "fallback": True}
+        with clip_lock:
+            stats["fallback_graphics"] -= 1
+        return None
+
+    def _pick_fresh(i, s):
         kind = (s.get("visual") or {}).get("kind", "real")
         if kind in GRAPHIC_KINDS and kind != "dossier":
             done[0] += 1
@@ -173,24 +260,21 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
             done[0] += 1
             return _hd(r) or {"kind": "graphic", "graphic": "dossier"}
         wants_video = s.get("video") or (s.get("visual") or {}).get("video")
-        if wants_video and kind == "real" and config.get("footage_enabled") and _clip_slot():
-            from . import footage
-            ws = scene_words[i] if i < len(scene_words) else []
-            need = (ws[-1].end - ws[0].start + 0.4) if ws else 4.0
-            try:
-                rv = footage.pick_scene_clip(s, context, need, (W, H), used_urls,
-                                             log_fn=lambda m: ctx.log(f"Cena {i + 1}: {m}"))
-            except Exception as e:  # noqa: BLE001
-                rv = None
-                ctx.log(f"Cena {i + 1}: filmagem falhou ({e}) — usando foto")
+        if wants_video and kind == "real":
+            rv = _try_clip(i, s)
             if rv:
                 done[0] += 1
                 ctx.update(0.15 + 0.4 * done[0] / len(scenes), f"Imagens: {done[0]}/{len(scenes)}")
                 return rv
-            with clip_lock:
-                stats["clips"] -= 1  # não achou: libera a vaga para outra cena
         r = visuals.pick_scene_image(s, context, ch.image_style, ai_size, ch.visual_mode,
-                                     log_fn=lambda m: ctx.log(f"Cena {i + 1}: {m}"), used=used_urls)
+                                     log_fn=lambda m: ctx.log(f"Cena {i + 1}: {m}"), used=used_urls,
+                                     credit_ok=ch.image_credit_ok)
+        if kind == "real" and (not r or r.get("score", 0) < min_q):
+            # foto fraca: tenta filmagem real; senão a cena vira gráfico animado (nunca imagem errada)
+            rv = None if wants_video else _try_clip(i, s)
+            alt = rv or _fallback_graphic(i, s)
+            if alt:
+                r = alt
         done[0] += 1
         ctx.update(0.15 + 0.4 * done[0] / len(scenes), f"Imagens: {done[0]}/{len(scenes)}")
         return _hd(r)
@@ -207,6 +291,9 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
 
     with ThreadPoolExecutor(3) as ex:
         picks = list(ex.map(pick, enumerate(scenes)))
+    for i, p in enumerate(picks):
+        if p and p.get("fallback") and p.get("visual"):
+            scenes[i] = {**scenes[i], "visual": p["visual"]}
     if stats["hd"]:
         ctx.log(f"{stats['hd']} foto(s) pequena(s) ampliada(s) com IA para ficarem nítidas em tela cheia")
     n_clips = sum(1 for p in picks if p and p.get("clip"))
@@ -290,6 +377,12 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
     thumb = make_thumbnail(bg_img, thumb_text, ch.theme or {}, workdir / "thumb.jpg", vertical,
                            variant=int(plan.get("thumb_variant", video_id)))
     ctx.log(f"Miniatura criada: “{thumb_text}”")
+    if not vertical and ch.thumbs_blocked:
+        try:
+            _cover_intro(out, thumb, W, H)
+            ctx.log("Canal sem miniatura personalizada: capa aplicada no 1º segundo do vídeo")
+        except Exception as e:  # noqa: BLE001
+            ctx.log(f"Capa no 1º quadro não aplicada: {e}")
 
     credits = []
     for i, p in enumerate(picks):
@@ -342,6 +435,18 @@ def recent_image_urls(channel_id: int, exclude_video: int, limit: int = 15) -> s
             if isinstance(p, dict) and p.get("url"):
                 urls.add(p["url"])
     return urls
+
+
+def _cover_intro(video: Path, thumb: Path, w: int, h: int, secs: float = 1.0) -> None:
+    """Mostra a miniatura no começo do vídeo (some com um fade) — o YouTube costuma oferecer quadros do vídeo
+    como capa quando o canal não pode enviar miniatura. A narração continua por baixo, sem atraso."""
+    from .media import video_encoder_args
+    tmp = video.with_name(video.stem + "_capa.mp4")
+    run_ffmpeg(["-i", str(video), "-loop", "1", "-t", f"{secs + 0.5:.2f}", "-i", str(thumb), "-filter_complex",
+                f"[1:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},format=rgba,"
+                f"fade=t=out:st={secs:.2f}:d=0.45:alpha=1[c];[0:v][c]overlay=0:0:eof_action=pass[v]",
+                "-map", "[v]", "-map", "0:a", *video_encoder_args(), "-c:a", "copy", "-movflags", "+faststart", str(tmp)])
+    tmp.replace(video)
 
 
 def _chapters(scenes: list[dict[str, Any]], scene_ts: list) -> list[dict[str, Any]]:

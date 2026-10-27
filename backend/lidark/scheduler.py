@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlmodel import func, select
 
+from . import config
 from .config import DATA_DIR
 from .db import session
 from .jobs import enqueue
@@ -148,6 +149,8 @@ def backup_db(keep: int = 14) -> None:
 def trend_radar_all() -> None:
     """Todo dia: radar de tendências para os canais conectados."""
     from .models import Account
+    if not config.get("trend_radar_enabled"):
+        return
     with session() as s:
         ids = {a.channel_id for a in s.exec(select(Account).where(Account.platform == "youtube")).all() if a.credentials}
         names = {c.id: c.name for c in s.exec(select(Channel)).all()}

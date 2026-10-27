@@ -219,6 +219,14 @@ def channel_preview(cid: int, s: Session = Depends(get_session)):
     return {"urls": render_preview(cid)}
 
 
+@router.post("/channels/{cid}/brandkit")
+def channel_brandkit(cid: int, s: Session = Depends(get_session)):
+    """Foto de perfil, capa e marca d'água desenhadas com o mascote e a paleta do canal."""
+    from .brandkit import channel_kit
+    _get(s, Channel, cid)
+    return channel_kit(cid)
+
+
 @router.get("/mascots")
 def mascots():
     from .render.characters import DEFAULT_COLORS, KINDS
@@ -450,8 +458,146 @@ def cancel_job(jid: int):
 @router.post("/jobs/{jid}/retry")
 def retry_job(jid: int, s: Session = Depends(get_session)):
     j = _get(s, Job, jid)
-    n = jobs.enqueue(j.kind, title=j.title, channel_id=j.channel_id, ref_id=j.ref_id, payload=j.payload)
+    payload = {k: v for k, v in (j.payload or {}).items() if not k.startswith("_")}  # controle interno não vai junto
+    n = jobs.enqueue(j.kind, title=j.title, channel_id=j.channel_id, ref_id=j.ref_id, payload=payload)
     return jobs.job_dict(n)
+
+
+@router.post("/jobs/{jid}/bump")
+def bump_job(jid: int):
+    """Passa a tarefa (na fila) para a frente."""
+    jobs.bump(jid)
+    return {"ok": True}
+
+
+@router.get("/jobs-capacity")
+def jobs_capacity(s: Session = Depends(get_session)):
+    """Quanto o notebook consegue renderizar por dia × quanto os horários dos canais pedem."""
+    done = s.exec(select(Job).where(Job.kind == "render_video", Job.status == "done")
+                  .order_by(Job.id.desc()).limit(40)).all()
+    mins: dict[str, list[float]] = {"short": [], "long": []}
+    for j in done:
+        sc = s.get(Script, j.ref_id) if j.ref_id else None
+        if sc and j.started_at and j.finished_at:
+            m = (j.finished_at - j.started_at).total_seconds() / 60
+            if 1 < m < 600:
+                mins[sc.format if sc.format in mins else "short"].append(m)
+    avg = {k: (sorted(v)[len(v) // 2] if v else (25.0 if k == "short" else 70.0)) for k, v in mins.items()}
+    measured = {k: len(v) for k, v in mins.items()}
+    rows, need = [], 0.0
+    for ch in s.exec(select(Channel).order_by(Channel.id)).all():
+        slots = [str(x) for x in ch.posting_slots or []]
+        longs_week = sum("longo" in x.lower() for x in slots)
+        shorts_day = (len(slots) - longs_week) if "short" in (ch.formats or []) else 0
+        if "long" in (ch.formats or []) and not longs_week:
+            longs_week = 1
+        if "long" not in (ch.formats or []):
+            longs_week = 0
+        m = shorts_day * avg["short"] + longs_week / 7 * avg["long"]
+        need += m
+        rows.append({"channel_id": ch.id, "name": ch.name, "shorts_day": shorts_day, "longs_week": longs_week,
+                     "minutes_day": round(m), "auto_pilot": ch.auto_pilot})
+    queued = s.exec(select(Job).where(Job.kind == "render_video", Job.status.in_(["queued", "running"]))).all()
+    q_min = 0.0
+    for j in queued:
+        sc = s.get(Script, j.ref_id) if j.ref_id else None
+        q_min += avg["long" if sc and sc.format == "long" else "short"] * (1 - (j.progress or 0))
+    return {"avg_minutes": {k: round(v, 1) for k, v in avg.items()}, "measured": measured, "channels": rows,
+            "need_hours_day": round(need / 60, 1), "available_hours_day": 24,
+            "usage": round(need / (24 * 60), 2), "queue_renders": len(queued), "queue_hours": round(q_min / 60, 1)}
+
+
+# ================================================================ assistente "Novo canal"
+
+@router.get("/brand-drafts")
+def list_drafts(s: Session = Depends(get_session)):
+    from .brandwizard import draft_dict
+    from .models import BrandDraft
+    return [draft_dict(d) for d in s.exec(select(BrandDraft).order_by(BrandDraft.id.desc()).limit(30)).all()]
+
+
+@router.post("/brand-drafts")
+def create_draft(data: dict[str, Any], s: Session = Depends(get_session)):
+    from .brandwizard import draft_dict
+    from .models import BrandDraft
+    niche = str(data.get("niche") or "").strip()
+    if len(niche) < 3:
+        raise HTTPException(400, "Descreva o nicho do canal")
+    d = BrandDraft(niche=niche, notes=str(data.get("notes") or "").strip())
+    s.add(d)
+    s.commit()
+    s.refresh(d)
+    jobs.enqueue("brand_propose", title=f"Novo canal: {niche[:50]}", ref_id=d.id)
+    return draft_dict(d)
+
+
+@router.get("/brand-drafts/{did}")
+def get_draft(did: int, s: Session = Depends(get_session)):
+    from .brandwizard import draft_dict
+    from .models import BrandDraft
+    return draft_dict(_get(s, BrandDraft, did))
+
+
+@router.post("/brand-drafts/{did}/redo")
+def redo_draft(did: int, s: Session = Depends(get_session)):
+    from .models import BrandDraft
+    d = _get(s, BrandDraft, did)
+    d.options, d.chosen, d.texts, d.status = [], -1, {}, "draft"
+    s.add(d)
+    s.commit()
+    return jobs.job_dict(jobs.enqueue("brand_propose", title=f"Novo canal: {d.niche[:50]}", ref_id=d.id))
+
+
+@router.post("/brand-drafts/{did}/choose")
+def choose_draft(did: int, data: dict[str, Any], s: Session = Depends(get_session)):
+    from .models import BrandDraft
+    d = _get(s, BrandDraft, did)
+    i = int(data.get("index", -1))
+    if not 0 <= i < len(d.options):
+        raise HTTPException(400, "Opção inválida")
+    d.chosen, d.texts = i, {}
+    s.add(d)
+    s.commit()
+    return jobs.job_dict(jobs.enqueue("brand_texts", title=f"Textos do canal: {d.options[i]['name']}", ref_id=d.id))
+
+
+@router.post("/brand-drafts/{did}/apply")
+def apply_draft_to(did: int, data: dict[str, Any], s: Session = Depends(get_session)):
+    from .brandwizard import apply_draft
+    from .models import BrandDraft
+    d = _get(s, BrandDraft, did)
+    cid = int(data.get("channel_id") or 0)
+    _get(s, Channel, cid)
+    if d.chosen < 0 or not d.texts:
+        raise HTTPException(400, "Escolha um nome e espere os textos ficarem prontos")
+    apply_draft(did, cid)
+    from .channels import render_preview
+    render_preview(cid)
+    return {"ok": True}
+
+
+@router.delete("/brand-drafts/{did}")
+def delete_draft(did: int, s: Session = Depends(get_session)):
+    from .models import BrandDraft
+    s.delete(_get(s, BrandDraft, did))
+    s.commit()
+    return {"ok": True}
+
+
+@router.get("/system/restart")
+def restart_status():
+    return jobs.restart_status()
+
+
+@router.post("/system/restart")
+def restart(data: dict[str, Any] | None = None):
+    """Reinicia o servidor quando ficar livre (nunca no meio de um render)."""
+    return jobs.request_restart(when_idle=(data or {}).get("when_idle", True))
+
+
+@router.post("/system/restart/cancel")
+def restart_cancel():
+    return jobs.cancel_restart()
 
 
 # ================================================================ painel geral

@@ -24,6 +24,8 @@ KINDS = {
     "globe": "Globo terrestre (geografia, países, viagens, culturas)",
     "ghost": "Fantasminha (terror, paranormal, lendas urbanas)",
     "flask": "Frasco de laboratório (ciência, química, experimentos)",
+    "ball": "Bola de futebol (futebol, Copas, craques, histórias da bola)",
+    "trophy": "Troféu (esportes em geral, campeões, recordes, Olimpíadas)",
     "none": "Sem mascote",
 }
 
@@ -31,7 +33,7 @@ DEFAULT_COLORS = {
     "clock": ("#e9ba52", "#cd583a"), "book": ("#2f6db5", "#f3e7c9"), "planet": ("#e98a3c", "#f2d27a"),
     "magnifier": ("#3b3f46", "#bfe3f2"), "bulb": ("#ffe27a", "#9aa3ad"), "brain": ("#f2a3b3", "#d97b90"),
     "coin": ("#f2c14e", "#c8922a"), "globe": ("#3a8fd6", "#5cbf6a"), "ghost": ("#f5f3ff", "#c9c2f0"),
-    "flask": ("#dff3f2", "#38c172"),
+    "flask": ("#dff3f2", "#38c172"), "ball": ("#f7f7f2", "#1d2024"), "trophy": ("#f2c14e", "#2f6b3a"),
 }
 
 
@@ -54,7 +56,8 @@ class CharacterMascot(ClockMascot):
         self.has_hands = False
         cfg = {"book": (0.05, 1.1, 0.78), "planet": (-0.2, 1.15, 0.92), "magnifier": (-0.12, 1.05, 0.86),
                "bulb": (-0.12, 1.15, 0.82), "brain": (0.05, 1.15, 0.95), "coin": (0.0, 1.2, 0.92),
-               "globe": (0.0, 1.15, 0.92), "ghost": (-0.05, 1.2, 0.82), "flask": (0.22, 1.0, 0.72)}
+               "globe": (0.0, 1.15, 0.92), "ghost": (-0.05, 1.2, 0.82), "flask": (0.22, 1.0, 0.72),
+               "ball": (0.05, 1.1, 0.92), "trophy": (-0.28, 0.95, 0.8)}
         self.face_dy, self.face_scale, self.shoulder = cfg.get(self.kind, (0.0, 1.1, 0.9))
         self.w = int(self.R * 4.0) if self.kind == "planet" else self.w
         self.cx = self.w * 0.5
@@ -193,6 +196,45 @@ class CharacterMascot(ClockMascot):
         img.paste(fill, (0, 0), Image.composite(fill.getchannel("A"), Image.new("L", img.size, 0), liq))
         d.line(body + [body[0]], fill=INK, width=ow, joint="curve")
         d.rounded_rectangle((cx - neck_w * 0.75, top, cx + neck_w * 0.75, top + R * 0.18), int(R * 0.05), fill=self.col, outline=INK, width=ow)
+
+    def _body_ball(self, d, img, cx, cy, R, ow):
+        d.ellipse((cx - R, cy - R, cx + R, cy + R), fill=self.col, outline=INK, width=ow)
+        mask = Image.new("L", img.size, 0)
+        ImageDraw.Draw(mask).ellipse((cx - R + ow, cy - R + ow, cx + R - ow, cy + R - ow), fill=255)
+        patches = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        pd = ImageDraw.Draw(patches)
+        seam = _shade(self.col, 0.6)
+        pent = []
+        for k in range(5):  # gomos pretos na borda (o centro fica livre para o rosto) + costuras dos hexágonos
+            a = math.radians(-90 + 72 * k + 36)
+            px, py = cx + R * 0.86 * math.cos(a), cy + R * 0.86 * math.sin(a)
+            pts = [(px + R * 0.27 * math.cos(a + math.radians(72 * j)), py + R * 0.27 * math.sin(a + math.radians(72 * j)))
+                   for j in range(5)]
+            pent.append(pts)
+            pd.polygon(pts, fill=self.acc)
+        for k in range(5):
+            p1, p2 = pent[k], pent[(k + 1) % 5]
+            m1 = max(p1, key=lambda q: -math.hypot(q[0] - p2[0][0], q[1] - p2[0][1]))
+            m2 = min(p2, key=lambda q: math.hypot(q[0] - m1[0], q[1] - m1[1]))
+            pd.line((m1, m2), fill=seam, width=max(2, ow // 2))
+            pd.line((m1, (cx + (m1[0] - cx) * 0.62, cy + (m1[1] - cy) * 0.62)), fill=seam, width=max(2, ow // 2))
+        img.paste(patches, (0, 0), Image.composite(patches.getchannel("A"), Image.new("L", img.size, 0), mask))
+        d.arc((cx - R * 0.8, cy - R * 0.8, cx + R * 0.8, cy + R * 0.8), 200, 245, fill=(255, 255, 255, 255), width=int(R * 0.06))
+        d.ellipse((cx - R, cy - R, cx + R, cy + R), outline=INK, width=ow)
+
+    def _body_trophy(self, d, img, cx, cy, R, ow):
+        top, rim = cy - R * 1.05, R * 1.0
+        for sgn in (-1, 1):  # alças
+            box = (cx + sgn * R * 0.9 - R * 0.4, cy - R * 0.9, cx + sgn * R * 0.9 + R * 0.4, cy - R * 0.1)
+            d.arc(box, 270 if sgn > 0 else 90, 90 if sgn > 0 else 270, fill=INK, width=int(R * 0.2))
+            d.arc(box, 270 if sgn > 0 else 90, 90 if sgn > 0 else 270, fill=self.col, width=int(R * 0.12))
+        d.rounded_rectangle((cx - R * 0.62, cy + R * 0.95, cx + R * 0.62, cy + R * 1.2), int(R * 0.05), fill=self.acc, outline=INK, width=ow)
+        d.rectangle((cx - R * 0.42, cy + R * 0.8, cx + R * 0.42, cy + R * 0.97), fill=_shade(self.col, 0.8), outline=INK, width=ow)
+        d.polygon([(cx - R * 0.14, cy + R * 0.3), (cx + R * 0.14, cy + R * 0.3), (cx + R * 0.24, cy + R * 0.82), (cx - R * 0.24, cy + R * 0.82)],
+                  fill=_shade(self.col, 0.85), outline=INK)
+        d.chord((cx - rim, top - R * 1.25, cx + rim, top + R * 1.45), 0, 180, fill=self.col, outline=INK, width=ow)
+        d.rounded_rectangle((cx - rim - R * 0.06, top - R * 0.1, cx + rim + R * 0.06, top + R * 0.08), int(R * 0.04), fill=_shade(self.col, 1.12), outline=INK, width=ow)
+        d.arc((cx - R * 0.8, top - R * 0.4, cx + R * 0.5, top + R * 1.3), 120, 165, fill=(255, 250, 225, 255), width=int(R * 0.06))
 
 
 def make_mascot(theme: dict, radius: int, seed: int = 0) -> ClockMascot | None:

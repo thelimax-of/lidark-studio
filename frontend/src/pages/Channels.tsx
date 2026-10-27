@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { Plus, MonitorPlay as Youtube, Users, Eye, PlaySquare, Loader2, Link2 } from 'lucide-react'
+import { Plus, MonitorPlay as Youtube, Users, Eye, PlaySquare, Loader2, Link2, Sparkles } from 'lucide-react'
 import { api, useApi, type Channel } from '../api'
 import { act, fmtNum, PageHeader, toast, useChannel } from '../ui'
 
@@ -16,7 +16,8 @@ export default function Channels() {
   const { setChannelId } = useChannel()
   return (
     <>
-      <PageHeader title="Canais" subtitle="Seus canais dark vêm direto do YouTube. Conecte e a IA monta a identidade de cada um." />
+      <PageHeader title="Canais" subtitle="Seus canais dark vêm direto do YouTube. Conecte e a IA monta a identidade de cada um."
+        actions={<Link to="/canais/novo" className="btn btn-primary"><Sparkles size={15} /> Planejar novo canal</Link>} />
       <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-5">
         {data.map(c => (
           <Link key={c.id} to={`/canais/${c.id}`} onClick={() => setChannelId(c.id)}

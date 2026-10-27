@@ -16,6 +16,7 @@ import Videos from './pages/Videos'
 import Jobs from './pages/Jobs'
 import Channels, { Avatar } from './pages/Channels'
 import ChannelDetail from './pages/ChannelDetail'
+import NewChannel from './pages/NewChannel'
 import Settings from './pages/Settings'
 import Publish from './pages/Publish'
 import Metrics from './pages/Metrics'
@@ -293,6 +294,7 @@ export default function App() {
             <Route path="/metricas" element={<Metrics />} />
             <Route path="/fila" element={<Jobs />} />
             <Route path="/canais" element={<Channels />} />
+            <Route path="/canais/novo" element={<NewChannel />} />
             <Route path="/canais/:id" element={<ChannelDetail />} />
             <Route path="/config" element={<Settings />} />
           </Routes>

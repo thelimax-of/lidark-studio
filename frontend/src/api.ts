@@ -40,6 +40,7 @@ export type Channel = {
   synced_at: string | null; setup_status: string; connected?: boolean
   radar?: { keywords?: string[]; competitors?: string[]; competitor_names?: Record<string, string> }
   counts?: { ideas: number; scripts: number; videos: number; published: number }
+  footage?: boolean; image_credit_ok?: boolean; yt_category?: string; thumbs_blocked?: boolean
 }
 
 export type Idea = {
@@ -52,12 +53,15 @@ export type Idea = {
 
 export type Scene = { text: string; visual: { kind: string; query?: string; query_pt?: string; prompt?: string }; emphasis?: string[] }
 
+export type Claim = { scene: number; claim: string; verdict: string; source?: string; note?: string }
+
 export type Script = {
   id: number; channel_id: number; idea_id: number | null; format: string; title: string; hook: string
   scenes: Scene[]; description: string; tags: string[]; hashtags: string[]; thumbnail_text: string
   status: string; quality_score: number | null; review_notes: string
   variety?: { series?: string; structure?: string; hook_style?: string; title_style?: string; seconds?: number; template?: string }
   fact_check: { scene?: number; claim: string; problem: string; fix: string }[]
+  claims?: { items: Claim[]; fixed?: number; unresolved?: Claim[]; sources?: number }
   sources: { title: string; url: string }[]; version: number; created_at: string
 }
 
@@ -69,7 +73,7 @@ export type Video = {
 
 export type Job = {
   id: number; kind: string; channel_id: number | null; ref_id: number | null; title: string
-  status: string; progress: number; stage: string; error: string; result: any
+  status: string; priority?: number; progress: number; stage: string; error: string; result: any
   created_at: string; started_at: string | null; finished_at: string | null; log?: string
 }
 

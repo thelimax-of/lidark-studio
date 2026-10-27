@@ -156,6 +156,21 @@ export default function ChannelDetail() {
               <Choice on={f.visual_mode === 'mixed'} onClick={() => set({ visual_mode: 'mixed' })} title="Misto" text="Foto real quando existir; IA cria o que não tem registro." />
               <Choice on={f.visual_mode === 'ai'} onClick={() => set({ visual_mode: 'ai' })} title="100% IA" text="Tudo gerado por IA, com controle de qualidade." />
             </div>
+            <div className="flex flex-wrap items-center gap-2 mt-4">
+              <Toggle on={!!f.footage} label="Filmagens reais (NASA/Commons)" onClick={() => set({ footage: !f.footage })} />
+              <Toggle on={!!f.image_credit_ok} label="Aceitar fotos com crédito (CC BY)" onClick={() => set({ image_credit_ok: !f.image_credit_ok })} />
+              <span className="text-sm text-muted ml-2">Categoria no YouTube</span>
+              <select className="input !w-auto !py-1" value={f.yt_category ?? '27'} onChange={e => set({ yt_category: e.target.value })}>
+                {[['27', 'Educação'], ['17', 'Esportes'], ['28', 'Ciência e tecnologia'], ['24', 'Entretenimento'], ['22', 'Pessoas e blogs'], ['19', 'Viagens e eventos'], ['25', 'Notícias e política']].map(([v, l]) =>
+                  <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
+            <p className="text-xs text-muted mt-2">Filmagem entra quando a foto encontrada é fraca; sem filmagem boa, a cena vira gráfico animado. Fotos com crédito ganham a atribuição na descrição do vídeo.</p>
+            {f.thumbs_blocked && (
+              <div className="mt-3 p-3 rounded-lg border border-warn/30 bg-warn/5 text-sm">
+                O YouTube recusou a miniatura deste canal (falta verificar por telefone em youtube.com/verify). Até lá, os vídeos longos saem com a capa no primeiro segundo.
+              </div>
+            )}
           </Section>
 
           <Section icon={<Bot size={18} />} title="Piloto automático" subtitle="Produz e agenda sozinho nos horários escolhidos.">
@@ -205,6 +220,7 @@ export default function ChannelDetail() {
             ))}
           </div>
           <p className="text-xs text-muted mt-3">A prévia usa o banner do canal como imagem de exemplo. Salve as mudanças para atualizar.</p>
+          <BrandKit channelId={f.id} beforeRun={dirty ? save : undefined} />
         </div>
       </div>
 
@@ -485,6 +501,40 @@ function ChipList({ items, onChange, placeholder, label }: { items: string[]; on
         <input className="input !py-1.5" value={v} placeholder={placeholder} onChange={e => setV(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()} />
         <button className="btn !py-1" onClick={add}><Plus size={14} /> Adicionar</button>
       </div>
+    </div>
+  )
+}
+
+type Kit = { avatar: string; banner: string; watermark: string; sheet: string }
+
+function BrandKit({ channelId, beforeRun }: { channelId: number; beforeRun?: () => Promise<void> }) {
+  const [kit, setKit] = useState<Kit | null>(null)
+  const [busy, setBusy] = useState(false)
+  const run = async () => {
+    setBusy(true)
+    if (beforeRun) await beforeRun()
+    const r = await act(() => api<Kit>(`/channels/${channelId}/brandkit`, { body: {} }))
+    if (r) setKit(Object.fromEntries(Object.entries(r).map(([k, v]) => [k, `${v}?v=${Date.now()}`])) as Kit)
+    setBusy(false)
+  }
+  return (
+    <div className="border-t border-line mt-4 pt-4">
+      <div className="flex items-center justify-between mb-2">
+        <div className="font-semibold">Kit de marca</div>
+        <button className="btn !py-1" disabled={busy} onClick={run}>
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />} {kit ? 'Gerar de novo' : 'Gerar'}</button>
+      </div>
+      <p className="text-xs text-muted">Foto de perfil, capa e marca d'água com o mascote e as cores do canal. Envie no YouTube Studio → Personalização.</p>
+      {kit && (
+        <div className="mt-3 space-y-2">
+          <a href={kit.sheet} target="_blank" rel="noreferrer"><img src={kit.sheet} className="rounded-lg border border-line w-full" alt="" /></a>
+          <div className="flex flex-wrap gap-2 text-xs">
+            {([['avatar', 'Foto de perfil'], ['banner', 'Capa'], ['watermark', "Marca d'água"]] as const).map(([k, l]) => (
+              <a key={k} className="btn !py-1" href={kit[k]} download>{l}</a>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

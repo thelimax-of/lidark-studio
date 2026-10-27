@@ -209,9 +209,9 @@ def commons_license(url: str) -> str:
         return ""
 
 
-def find_candidates(query: str, query_pt: str = "", limit: int = 8) -> list[dict[str, Any]]:
+def find_candidates(query: str, query_pt: str = "", limit: int = 8, credit_ok: bool = False) -> list[dict[str, Any]]:
     cands: list[dict[str, Any]] = []
-    only_free = bool(config.get("no_attribution_only"))
+    only_free = bool(config.get("no_attribution_only")) and not credit_ok  # canal que aceita crédito na descrição
 
     def add(items: list[dict[str, Any]]) -> None:
         cands.extend(c for c in items if not only_free or license_free(c))
@@ -387,13 +387,13 @@ def _gemini_image(prompt: str, w: int, h: int) -> bytes | None:
 
 # ================================================================ orquestração por cena
 
-def _gather(queries: list[str], exclude: set[str], limit: int = 12) -> list[dict[str, Any]]:
+def _gather(queries: list[str], exclude: set[str], limit: int = 12, credit_ok: bool = False) -> list[dict[str, Any]]:
     """Junta candidatos de várias buscas (pt e en), sem repetir e sem imagens já usadas no vídeo."""
     seen, out = set(exclude), []
     for q in queries:
         if not q:
             continue
-        for c in find_candidates(q, q if _looks_pt(q) else "", limit=8):
+        for c in find_candidates(q, q if _looks_pt(q) else "", limit=8, credit_ok=credit_ok):
             if c["url"] in seen:
                 continue
             seen.add(c["url"])
@@ -434,7 +434,8 @@ Responda JSON: {{"queries": ["...", "...", "...", "..."]}}""", temperature=0.4)
 
 
 def pick_scene_image(scene: dict[str, Any], context: str, image_style: str, size: tuple[int, int],
-                     mode: str, log_fn=lambda m: None, used: set[str] | None = None) -> dict[str, Any] | None:
+                     mode: str, log_fn=lambda m: None, used: set[str] | None = None,
+                     credit_ok: bool = False) -> dict[str, Any] | None:
     """Escolhe a melhor imagem para a cena: várias buscas de fotos reais, novas buscas sugeridas pela IA
     e, se habilitado, geração por IA. Nunca devolve imagem abaixo da nota mínima."""
     min_q = int(config.get("image_min_quality"))
@@ -459,12 +460,12 @@ def pick_scene_image(scene: dict[str, Any], context: str, image_style: str, size
         queries = [v.get("query"), v.get("query_pt"), scene.get("label"),
                    " ".join((scene.get("emphasis") or [])[:3])]
         queries = list(dict.fromkeys(q.strip() for q in queries if q and q.strip()))
-        consider(_judge_pool(_gather(queries, used), text, context, log_fn))
+        consider(_judge_pool(_gather(queries, used, credit_ok=credit_ok), text, context, log_fn))
         if not best or best["score"] < min_q:
             alt = _alt_queries(text, context, queries)
             if alt:
                 log_fn(f"Tentando novas buscas: {', '.join(alt)}")
-                consider(_judge_pool(_gather(alt, used | ({best["url"]} if best else set())), text, context, log_fn))
+                consider(_judge_pool(_gather(alt, used | ({best["url"]} if best else set()), credit_ok=credit_ok), text, context, log_fn))
 
     if (not best or best["score"] < min_q) and config.get("image_ai_provider") != "none" and mode != "real":
         prompt = v.get("prompt") or f"{text}. {image_style}"

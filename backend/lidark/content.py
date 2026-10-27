@@ -415,6 +415,93 @@ Responda JSON: {{"scenes": [...]}}"""
     return scenes if scenes and len(scenes) >= len(script.scenes) // 2 else script.scenes
 
 
+def scenes_sig(scenes: list[dict[str, Any]]) -> str:
+    import hashlib
+    return hashlib.sha1(" ".join((s.get("text") or "").strip() for s in scenes).encode()).hexdigest()[:16]
+
+
+def check_claims(ch: Channel, script: Script, idea: Idea | None) -> dict[str, Any]:
+    """Checagem frase a frase do roteiro FINAL contra as fontes: cada afirmação concreta (data, número, nome,
+    evento, causa) precisa estar nas fontes. O que não estiver é corrigido ou retirado da cena."""
+    urls: list[str] = []
+    for u in [s.get("url") for s in (idea.sources if idea else [])] + [s.get("url") for s in script.sources or []] + \
+             [u for f in (idea.facts if idea else []) for u in (f.get("sources") or [])]:
+        if u and u not in urls:
+            urls.append(u)
+    srcs = []
+    for u in urls[:6]:
+        txt = research.fetch_page_text(u, 3500)
+        if txt and len(txt) > 300:
+            srcs.append({"url": u, "text": txt})
+    if len(srcs) < 2:
+        seen = {s["url"] for s in srcs}
+        srcs += [{"url": s["url"], "text": s["text"][:3500]} for s in
+                 research.gather_dossier(script.title.replace("#Shorts", ""), max_sources=4)["sources"] if s["url"] not in seen]
+    if not srcs:
+        return {"items": [], "fixes": {}, "sources": 0}
+    material = "\n\n".join(f"[{i + 1}] {s['url']}\n{s['text']}" for i, s in enumerate(srcs[:6]))
+    confirmed = "\n".join(f"- {f.get('claim')}" for f in (idea.facts if idea else []) if f.get("verdict") == "confirmado")
+    scenes = "\n".join(f"{i + 1}. {s.get('text', '')}" for i, s in enumerate(script.scenes))
+    prompt = f"""Você é checador de fatos de um canal sobre {ch.niche}. Confira o roteiro FINAL frase por frase.
+TÍTULO: {script.title}
+ROTEIRO (cenas numeradas):
+{scenes}
+
+FATOS JÁ CONFIRMADOS NA PAUTA:
+{confirmed or '(nenhum)'}
+
+FONTES:
+{material}
+
+1) Extraia TODAS as afirmações concretas: datas, números, nomes, lugares, eventos, citações, causas e consequências.
+   Ignore opiniões, perguntas retóricas, comparações didáticas evidentes e a chamada final (CTA).
+2) Para cada uma: "confirmado" (está nas fontes ou nos fatos confirmados), "sem_fonte" (as fontes não falam disso)
+   ou "contradiz" (as fontes dizem outra coisa).
+3) Para cada cena com afirmação "sem_fonte" ou "contradiz", reescreva o TEXTO INTEIRO da cena: corrija com o que as
+   fontes dizem ou retire a afirmação. Mantenha o tom, o ritmo e o tamanho (±15% de palavras). Não invente nada novo.
+Responda JSON: {{"claims": [{{"scene": 1, "claim": "...", "verdict": "confirmado|sem_fonte|contradiz", "source": 1, "note": "..."}}],
+"fixes": [{{"scene": 1, "text": "texto novo da cena"}}]}}"""
+    data = llm.complete_json(prompt, temperature=0.1)
+    items = [c for c in (data.get("claims") or []) if isinstance(c, dict) and c.get("claim")]
+    for c in items:
+        k = c.get("source")
+        c["source"] = srcs[k - 1]["url"] if isinstance(k, int) and 1 <= k <= len(srcs) else ""
+    bad_scenes = {c.get("scene") for c in items if c.get("verdict") in ("sem_fonte", "contradiz")}
+    fixes = {}
+    for f in data.get("fixes") or []:
+        idx, txt = f.get("scene"), (f.get("text") or "").strip()
+        if isinstance(idx, int) and 1 <= idx <= len(script.scenes) and txt and idx in bad_scenes:
+            old = script.scenes[idx - 1].get("text", "")
+            if 0.5 <= len(txt.split()) / max(1, len(old.split())) <= 1.6:
+                fixes[idx - 1] = txt
+    return {"items": items, "fixes": fixes, "sources": len(srcs)}
+
+
+def scene_graphic(ch: Channel, title: str, scene: dict[str, Any], facts_hint: str = "") -> dict[str, Any] | None:
+    """Cena sem foto boa → gráfico animado com os dados DA PRÓPRIA narração (nada inventado). None se não couber."""
+    from .render.infographics import normalize
+    prompt = f"""Vídeo: {title} (canal sobre {ch.niche}).
+Esta cena não tem foto boa. Transforme-a num gráfico animado usando SOMENTE informações que estão no texto da cena
+(ou nos fatos confirmados abaixo). Nunca invente datas, números, nomes ou citações.
+TEXTO DA CENA: {scene.get('text', '')}
+FATOS CONFIRMADOS: {facts_hint or '(nenhum)'}
+
+Tipos possíveis:
+- "counter": um número marcante do texto → {{"value": 11, "prefix": "", "suffix": " km", "label": "o que o número significa"}}
+- "timeline": 2-4 datas do texto → {{"title": "...", "events": [{{"year": "1904", "label": "até 4 palavras"}}]}}
+- "map": um lugar citado → {{"scope": "brasil" ou "mundo", "highlight": ["SP"] (sigla de estado) ou ["US"] (ISO-2), "label": "Local"}}
+- "list": 2-4 fatos/itens citados → {{"title": "...", "items": ["...", "..."]}}
+- "quote": frase dita por alguém, literal no texto → {{"text": "...", "author": "..."}}
+Se nenhum tipo couber com o que está no texto, responda {{"kind": "none"}}.
+Responda JSON: {{"kind": "counter|timeline|map|list|quote|none", "data": {{...}}}}"""
+    data = llm.complete_json(prompt, temperature=0.2)
+    if not isinstance(data, dict) or data.get("kind") not in ("counter", "timeline", "map", "list", "quote"):
+        return None
+    v = {"kind": data["kind"], "data": data.get("data") or {}}
+    norm = normalize(v)
+    return {**v, "data": norm} if norm is not None else None
+
+
 CTA_WORDS = ("segue", "siga", "inscreva", "se inscreve", "sininho", "curte", "compartilha", "comenta")
 
 

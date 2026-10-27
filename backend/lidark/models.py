@@ -69,6 +69,11 @@ class Channel(SQLModel, table=True):
     min_score_to_produce: int = 75
     posting_slots: list = JsonField(["12:00", "19:00"])
     color: str = "#d4a017"
+    # Mídia e YouTube
+    footage: bool = False  # filmagens reais (NASA/Commons) nas cenas
+    image_credit_ok: bool = False  # aceita fotos CC BY/BY-SA (créditos vão na descrição)
+    yt_category: str = "27"  # 27 Educação · 17 Esportes · 28 Ciência e tecnologia
+    thumbs_blocked: bool = False  # YouTube recusou miniatura (canal sem verificação por telefone)
     created_at: datetime = Field(default_factory=now)
 
 
@@ -112,6 +117,7 @@ class Script(SQLModel, table=True):
     fact_check: list = JsonField([])
     sources: list = JsonField([])
     variety: dict = JsonField({})  # plano de variedade (estrutura, gancho, CTA, duração...)
+    claims: dict = JsonField({})  # checagem frase a frase: {"sig", "items": [...], "fixed": n}
     version: int = 1
     created_at: datetime = Field(default_factory=now)
 
@@ -142,6 +148,7 @@ class Job(SQLModel, table=True):
     title: str = ""
     payload: dict = JsonField({})
     status: str = Field(default="queued", index=True)  # queued | running | done | failed | cancelled
+    priority: int = 0  # maior passa na frente na fila
     progress: float = 0
     stage: str = ""
     log: str = TextField()
@@ -229,4 +236,18 @@ class Comment(SQLModel, table=True):
     reply: str = TextField()
     status: str = Field(default="new", index=True)  # new | replied | ignored
     replied_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=now)
+
+
+class BrandDraft(SQLModel, table=True):
+    """Canal planejado no assistente "Novo canal": identidade pronta, aplicada quando o canal for conectado."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    niche: str = ""
+    notes: str = TextField()
+    options: list = JsonField([])  # 3 propostas: {name, handle, tagline, kit: {avatar, banner, watermark, sheet}}
+    chosen: int = -1
+    identity: dict = JsonField({})  # campos do Channel + theme
+    texts: dict = JsonField({})  # bio, palavras-chave, playlists... (o TXT)
+    status: str = Field(default="draft", index=True)  # draft | chosen | applied
+    channel_id: Optional[int] = None
     created_at: datetime = Field(default_factory=now)

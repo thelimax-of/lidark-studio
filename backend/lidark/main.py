@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import channels, cloud, community, importer, inspector, longform, pipeline, publish, radar  # noqa: F401  (registra handlers da fila)
+from . import brandwizard, channels, cloud, community, importer, inspector, longform, pipeline, publish, radar  # noqa: F401  (registra handlers da fila)
 from .api import router
 from .config import FRONTEND_DIST, MEDIA_DIR
 from .render.core import FONTS as FONTS_DIR

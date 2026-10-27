@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import clsx from 'clsx'
-import { Activity, RotateCcw, Square, Check, Loader2, Mic, Captions, Image as ImageIcon, Music, Film, ShieldCheck, Search, PenLine, Sparkles } from 'lucide-react'
+import { Activity, RotateCcw, Square, Check, Loader2, Mic, Captions, Image as ImageIcon, Music, Film, ShieldCheck, Search, PenLine, Sparkles, ArrowUp, Power, Gauge } from 'lucide-react'
 import { api, invalidate, useApi, type Job } from '../api'
 import { act, ago, Empty, PageHeader, Progress, Status, Tabs } from '../ui'
 
@@ -9,6 +9,7 @@ const KIND: Record<string, string> = {
   write_script: 'Roteiro', review_script: 'Revisão', render_video: 'Vídeo', autopilot: 'Piloto automático',
   publish: 'Publicação', collect_metrics: 'Métricas', setup_channel: 'Configuração do canal', channel_identity: 'Identidade do canal',
   trend_radar: 'Radar de tendências', inspect_video: 'Inspeção de qualidade', import_youtube: 'Importação',
+  brand_propose: 'Novo canal: propostas', brand_texts: 'Novo canal: textos',
 }
 
 const STEPS: Record<string, { label: string; icon: any; match: RegExp }[]> = {
@@ -24,6 +25,7 @@ const STEPS: Record<string, { label: string; icon: any; match: RegExp }[]> = {
     { label: 'Pesquisa', icon: Search, match: /pesquis/i },
     { label: 'Roteiro', icon: PenLine, match: /escrev|roteiro/i },
     { label: 'Revisão', icon: Sparkles, match: /revis|editor/i },
+    { label: 'Fatos', icon: ShieldCheck, match: /fatos frase/i },
   ],
 }
 
@@ -61,7 +63,8 @@ export default function Jobs() {
 
   return (
     <>
-      <PageHeader title="Produção" subtitle="Tudo que o motor está fazendo agora, etapa por etapa." />
+      <PageHeader title="Produção" subtitle="Tudo que o motor está fazendo agora, etapa por etapa." actions={<RestartButton />} />
+      <Capacity />
       {!data.length ? <Empty icon={<Activity size={20} />} title="Nenhuma tarefa ainda" /> : (
         <div className="grid lg:grid-cols-5 gap-5 items-start">
           <div className="lg:col-span-2 card overflow-hidden">
@@ -98,6 +101,8 @@ export default function Jobs() {
                     <h3 className="text-[16px] font-semibold mt-0.5 truncate">{detail.title}</h3>
                   </div>
                   <div className="flex gap-2 shrink-0">
+                    {detail.status === 'queued' &&
+                      <button className="btn btn-sm" onClick={() => act(() => api(`/jobs/${detail.id}/bump`, { body: {} }), 'Passou na frente da fila').then(() => invalidate('/jobs'))}><ArrowUp size={13} /> Passar na frente</button>}
                     {(detail.status === 'running' || detail.status === 'queued') &&
                       <button className="btn btn-sm btn-danger" onClick={() => act(() => api(`/jobs/${detail.id}/cancel`, { body: {} }), 'Cancelado')}><Square size={13} /> Parar</button>}
                     {(detail.status === 'failed' || detail.status === 'cancelled') &&
@@ -125,5 +130,55 @@ export default function Jobs() {
         </div>
       )}
     </>
+  )
+}
+
+type Cap = {
+  avg_minutes: { short: number; long: number }; measured: { short: number; long: number }
+  channels: { channel_id: number; name: string; shorts_day: number; longs_week: number; minutes_day: number }[]
+  need_hours_day: number; usage: number; queue_renders: number; queue_hours: number
+}
+
+function Capacity() {
+  const { data } = useApi<Cap>('/jobs-capacity', { refetchInterval: 30000 })
+  if (!data) return null
+  const pct = Math.round(data.usage * 100)
+  const tone = pct > 85 ? 'text-bad' : pct > 60 ? 'text-warn' : 'text-ok'
+  return (
+    <div className="card p-4 mb-5">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+        <div className="flex items-center gap-2 font-semibold"><Gauge size={16} /> Capacidade do notebook</div>
+        <div className="text-[13px]"><span className={clsx('font-semibold num', tone)}>{data.need_hours_day}h</span> <span className="text-muted">de render por dia nos horários atuais ({pct}% do dia)</span></div>
+        <div className="text-[13px] text-muted">Short ≈ <span className="text-text num">{data.avg_minutes.short} min</span> · Longo ≈ <span className="text-text num">{data.avg_minutes.long} min</span>
+          {!(data.measured.short + data.measured.long) && ' (estimativa — ainda sem renders medidos)'}</div>
+        {data.queue_renders > 0 && <div className="text-[13px] text-muted">Fila: <span className="text-text num">{data.queue_renders}</span> vídeo(s) · ~<span className="text-text num">{data.queue_hours}h</span></div>}
+      </div>
+      {pct > 85 && <p className="text-[12.5px] text-bad mt-2">Os horários pedem mais render do que o notebook dá conta — a fila vai crescer. Tire horários ou deixe algum canal só com Shorts.</p>}
+      <div className="flex flex-wrap gap-2 mt-3">
+        {data.channels.map(c => (
+          <span key={c.channel_id} className="text-[12px] px-2 py-1 rounded-md border border-line text-muted">
+            {c.name}: <span className="text-text num">{c.shorts_day}</span> short/dia · <span className="text-text num">{c.longs_week}</span> longo/sem · <span className="num">{c.minutes_day} min</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function RestartButton() {
+  const { data, refetch } = useApi<{ draining: boolean; running: number[] }>('/system/restart', { refetchInterval: 5000 })
+  if (data?.draining) {
+    return (
+      <div className="flex items-center gap-2 text-[13px] text-warn">
+        <Loader2 size={14} className="animate-spin" /> Reiniciando quando ficar livre ({data.running.length} tarefa(s) rodando)
+        <button className="btn btn-sm" onClick={() => act(() => api('/system/restart/cancel', { body: {} })).then(() => refetch())}>Cancelar</button>
+      </div>
+    )
+  }
+  return (
+    <button className="btn btn-sm" title="Para de pegar tarefas novas, espera o que está rodando terminar e reinicia — nunca no meio de um vídeo"
+      onClick={() => act(() => api('/system/restart', { body: { when_idle: true } }), 'O servidor reinicia assim que ficar livre').then(() => refetch())}>
+      <Power size={13} /> Reiniciar quando ficar livre
+    </button>
   )
 }

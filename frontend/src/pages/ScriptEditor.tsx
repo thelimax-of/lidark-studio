@@ -62,6 +62,32 @@ export default function ScriptEditor() {
               </div>
             </div>
           )}
+          {(s.claims?.items?.length ?? 0) > 0 && (
+            <div className="card p-4">
+              <div className="label">Fatos frase a frase</div>
+              <div className="text-xs text-muted mb-2">
+                {s.claims!.items.filter(c => c.verdict === 'confirmado').length}/{s.claims!.items.length} confirmadas nas fontes
+                {s.claims!.fixed ? ` · ${s.claims!.fixed} cena(s) corrigida(s)` : ''}
+              </div>
+              {(s.claims!.unresolved?.length ?? 0) > 0 && (
+                <div className="space-y-2 mb-2">{s.claims!.unresolved!.map((c, k) => (
+                  <div key={k} className="text-xs p-2 rounded bg-bad/5 border border-bad/30">
+                    <div className="font-semibold">Cena {c.scene}: {c.claim}</div>
+                    <div className="text-muted mt-1">{c.verdict === 'contradiz' ? 'As fontes dizem outra coisa' : 'Nenhuma fonte confirma'} — revise antes do vídeo</div>
+                  </div>))}
+                </div>
+              )}
+              <details className="text-xs">
+                <summary className="cursor-pointer text-muted">Ver todas as afirmações</summary>
+                <div className="space-y-1 mt-2">{s.claims!.items.map((c, k) => (
+                  <div key={k} className="flex gap-2">
+                    <span className={c.verdict === 'confirmado' ? 'text-ok' : 'text-bad'}>{c.verdict === 'confirmado' ? '✓' : '✗'}</span>
+                    <span><span className="text-muted">Cena {c.scene}:</span> {c.claim}{c.source && <> · <a className="underline text-muted" href={c.source} target="_blank" rel="noreferrer">fonte</a></>}</span>
+                  </div>))}
+                </div>
+              </details>
+            </div>
+          )}
           {s.review_notes && <div className="card p-4"><div className="label">Sugestões</div><p className="text-sm whitespace-pre-wrap text-text/80">{s.review_notes}</p></div>}
           <div className="card p-4 space-y-3">
             <Field label="Descrição"><textarea className="input min-h-32 text-xs" value={s.description} onChange={e => upd({ description: e.target.value })} /></Field>

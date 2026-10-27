@@ -7,6 +7,8 @@ editoriais de cada roteiro. O plano fica salvo em Script.variety e é respeitado
 from __future__ import annotations
 
 import random
+import threading
+import time
 import re
 from collections import defaultdict
 from typing import Any
@@ -238,9 +240,25 @@ def _opening(title: str) -> str:
 
 # ---------------------------------------------------------------- plano do vídeo
 
+_reserved: dict[int, list[tuple[float, dict[str, Any]]]] = defaultdict(list)
+_reserve_lock = threading.Lock()
+RESERVE_SECONDS = 45 * 60
+
+
 def plan(ch: Channel, fmt: str) -> dict[str, Any]:
+    """Sorteia o plano já reservando as escolhas: roteiros escritos ao mesmo tempo enxergam uns aos outros
+    (antes, dois roteiros paralelos podiam sair com o mesmo título/estrutura)."""
+    with _reserve_lock:
+        t = time.time()
+        _reserved[ch.id] = [(ts, p) for ts, p in _reserved[ch.id] if t - ts < RESERVE_SECONDS]
+        out = _plan(ch, fmt, [p for _, p in reversed(_reserved[ch.id])])
+        _reserved[ch.id].append((t, out))
+        return out
+
+
+def _plan(ch: Channel, fmt: str, pending: list[dict[str, Any]]) -> dict[str, Any]:
     rng = random.Random()
-    hist = recent_plans(ch.id)
+    hist = pending + recent_plans(ch.id)
     perf = structure_performance(ch.id)
     try:
         from .growth import dimension_weights
