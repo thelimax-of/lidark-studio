@@ -274,6 +274,9 @@ def job_publish(ctx: JobContext) -> dict:
         s.add(v)
         s.commit()
     ctx.log(f"Publicado: {url or ext}")
+    from . import notify
+    notify.safe(f"✅ No ar · {ch.name}", pub.title.replace("#Shorts", "").strip(), event="published", tags=["white_check_mark"],
+                click=url or "")
     if acc.platform == "youtube":
         from .community import after_publish
         after_publish(pub.id, pub.channel_id)

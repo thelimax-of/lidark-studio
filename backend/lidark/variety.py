@@ -99,9 +99,23 @@ TITLES = {
     "contraste": "contraste entre duas ideias (ex.: 'Era X, virou Y')",
 }
 
+NEXT_CTA = "1"  # estilo que anuncia o próximo vídeo: só com uma pauta real da fila
+
+
+def next_idea(ch: Channel, current_idea_id: int | None, fmt: str):
+    """Pauta que o vídeo vai anunciar como 'próximo': a de maior nota, com fatos confirmados, ainda na fila."""
+    from .models import Idea
+    with session() as s:
+        rows = s.exec(select(Idea).where(Idea.channel_id == ch.id, Idea.status.in_(["new", "approved"]),
+                                         Idea.fact_status == "verified")).all()
+    rows = [i for i in rows if i.id != current_idea_id and i.score is not None and "prometida" not in (i.tags or [])]
+    rows.sort(key=lambda i: (i.format != fmt, -(i.score or 0)))
+    return rows[0] if rows else None
+
+
 CTA_STYLES = [
     "convite para seguir o canal ligado ao tema do vídeo",
-    "promessa do que vem no próximo vídeo + pedido para seguir",
+    "anúncio do PRÓXIMO VÍDEO (tema exato informado abaixo) + pedido para seguir",
     "pergunta para o público responder nos comentários + seguir",
     "pedido para mandar o vídeo para alguém que precisa saber disso",
     "pedido curto e direto para se inscrever",
@@ -276,6 +290,12 @@ def prompt_block(ch: Channel, p: dict[str, Any], fmt: str) -> str:
     titles = "\n".join(f"  - {h['title']}" for h in hist if h.get("title")) or "  (nenhum)"
     desc_open = "\n".join(f"  - {h['description'][:70]}" for h in hist if h.get("description")) or "  (nenhuma)"
     cta_style = CTA_STYLES[int(p.get("cta_style", 0)) % len(CTA_STYLES)]
+    if str(p.get("cta_style")) == NEXT_CTA:
+        if p.get("next_title"):
+            cta_style += (f'. O PRÓXIMO VÍDEO do canal será sobre: "{p["next_title"]}". Anuncie EXATAMENTE esse tema '
+                          "(pode reformular de forma chamativa, sem mudar o assunto). NUNCA invente outro tema")
+        else:
+            cta_style = CTA_STYLES[0]  # sem pauta confirmada na fila: não promete nada
     chapters = ("" if fmt == "short" else """
 - CAPÍTULOS: organize o vídeo em 5 a 8 blocos. A PRIMEIRA cena de cada bloco ganha o campo "chapter" com o título do
   capítulo (2-5 palavras, sem número). A cena 1 também tem "chapter". Cada bloco deve ter pelo menos 3 cenas.""")
@@ -283,7 +303,7 @@ def prompt_block(ch: Channel, p: dict[str, Any], fmt: str) -> str:
 - ESTRUTURA NARRATIVA DESTE VÍDEO: "{st['name']}". {st['how']} {st['graphics']}
 - GANCHO: a primeira frase deve ser {HOOKS.get(p.get('hook_style', ''), 'forte')}.
 - TÍTULO: {TITLES.get(p.get('title_style', ''), 'chamativo')}. NÃO comece o título com: {', '.join(repr(o) for o in p.get('avoid_openings', [])) or '(livre)'}.
-- CTA final: {cta_style}. Escreva um CTA NOVO com as palavras do canal ({ch.name}), contendo "segue", "siga" ou "inscreva"; inspire-se em "{ch.cta}" sem copiá-lo.
+- CTA final: {cta_style}. NUNCA prometa um "próximo vídeo" além do indicado aqui. Escreva um CTA NOVO com as palavras do canal ({ch.name}), contendo "segue", "siga" ou "inscreva"; inspire-se em "{ch.cta}" sem copiá-lo.
 - GRÁFICOS ANIMADOS: {dose} das cenas (o resto com imagens reais).
 - Não reutilize frases de efeito, aberturas ou fechamentos dos vídeos recentes.{chapters}
 TÍTULOS RECENTES DO CANAL (não imite a forma):

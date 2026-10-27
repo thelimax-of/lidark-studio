@@ -717,6 +717,66 @@ def connect_account(platform: str, channel_id: Optional[int] = None):
     return publish.start_connect(platform, channel_id)
 
 
+@router.post("/notify/test")
+def notify_test():
+    from . import notify
+    ok = notify.send("🔔 Lidark Studio", "Avisos funcionando! Assim chegam: vídeo pronto, revisão, falhas, publicação, "
+                     "comentários e o resumo das 21h.\n\n" + notify.daily_summary(), tags=["bell"], force=True)
+    if not ok:
+        raise HTTPException(400, "Não consegui enviar — confira a internet e o servidor ntfy")
+    return {"ok": True, "topic": notify.topic()}
+
+
+@router.get("/notify/topic")
+def notify_topic():
+    from . import notify
+    return {"topic": notify.topic(), "server": config.get("ntfy_server") or "https://ntfy.sh"}
+
+
+@router.get("/backup/status")
+def backup_status():
+    from . import cloud
+    return cloud.status()
+
+
+@router.post("/backup/drive/connect")
+def backup_drive_connect():
+    from . import cloud
+    try:
+        return cloud.connect()
+    except RuntimeError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.post("/backup/now")
+def backup_now():
+    from . import cloud
+    try:
+        return cloud.backup_now()
+    except RuntimeError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.get("/oauth/drive/callback", include_in_schema=False)
+def drive_callback(state: str = "", code: str = "", error: str = ""):
+    from fastapi.responses import HTMLResponse
+    from . import cloud
+    if error:
+        msg, ok = f"Login cancelado: {error}", False
+    else:
+        try:
+            cloud.callback(state, code)
+            msg, ok = "Google Drive conectado! O primeiro backup começa agora — pode fechar esta janela.", True
+            jobs.enqueue("cloud_backup", title="Backup na nuvem (Google Drive)")
+        except Exception as e:  # noqa: BLE001
+            msg, ok = f"Falha ao conectar: {e}", False
+    color = "#3fb950" if ok else "#f85149"
+    return HTMLResponse(f"""<!doctype html><meta charset="utf-8"><title>Lidark</title>
+<body style="background:#09090b;color:#ededef;font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0">
+<div style="text-align:center"><div style="font-size:42px;color:{color}">{'✓' if ok else '✗'}</div><p>{msg}</p></div>
+<script>setTimeout(()=>window.close(),{4000 if ok else 15000})</script></body>""")
+
+
 @router.get("/oauth/youtube/callback", include_in_schema=False)
 def youtube_callback(state: str = "", code: str = "", error: str = ""):
     from fastapi.responses import HTMLResponse

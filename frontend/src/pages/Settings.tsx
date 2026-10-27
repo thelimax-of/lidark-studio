@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Save, Zap, Plus, Trash2, KeyRound, Cpu, ImageIcon, Send } from 'lucide-react'
+import { Save, Zap, Plus, Trash2, KeyRound, Cpu, ImageIcon, Send, CloudUpload, Bell } from 'lucide-react'
 import { api, invalidate, useApi } from '../api'
 import { act, Field, PageHeader, toast } from '../ui'
 
@@ -98,6 +98,64 @@ export default function Settings() {
           </section>
         </div>
       </div>
+      <div className="grid lg:grid-cols-2 gap-6 mt-6">
+        <BackupCard />
+        <NotifyCard enabled={!!f.ntfy_enabled} muted={f.ntfy_muted ?? []} onChange={(k, v) => { set(k, v); act(() => api('/settings', { method: 'PUT', body: { ...f, [k]: v } })).then(() => invalidate('/settings')) }} />
+      </div>
     </>
+  )
+}
+
+function BackupCard() {
+  const { data: st } = useApi<any>('/backup/status', { refetchInterval: 15000 })
+  const connect = async () => {
+    const r: any = await act(() => api('/backup/drive/connect', { body: {} }))
+    if (r?.auth_url) { window.open(r.auth_url, '_blank', 'width=520,height=720'); toast.info('Autorize na janela do Google. O primeiro backup começa sozinho.') }
+  }
+  return (
+    <section className="card p-5 space-y-3">
+      <h3 className="font-semibold flex items-center gap-2"><CloudUpload size={17} className="text-muted" /> Backup na nuvem</h3>
+      <p className="text-sm text-muted">Todo dia às 3h20 um .zip com o banco, configurações, chaves e a identidade dos canais vai para o seu Google Drive
+        (guarda os 14 últimos). O código fica no GitHub (repositório privado). Os vídeos não entram — dá para refazer.</p>
+      {!st?.connected ? (
+        <button className="btn btn-primary" onClick={connect}><CloudUpload size={15} /> Conectar Google Drive</button>
+      ) : (
+        <div className="space-y-2 text-sm">
+          <div className="flex items-center gap-2"><span className={`dot ${st.last_error ? 'text-bad' : st.last_ok ? 'text-ok' : 'text-muted'}`} />
+            {st.last_ok ? <>Último backup: <b>{new Date(st.last_ok).toLocaleString('pt-BR')}</b> · {Math.round((st.last_size ?? 0) / 1024)} KB · {st.count} cópias</> : 'Conectado — aguardando o primeiro backup'}</div>
+          {st.last_error && <div className="text-xs text-bad break-words">{st.last_error}</div>}
+          <div className="flex gap-2">
+            <button className="btn btn-sm" onClick={() => act(() => api('/backup/now', { body: {} }), 'Backup enviado ao Google Drive').then(() => invalidate('/backup/status'))}><CloudUpload size={13} /> Fazer backup agora</button>
+            {st.folder_url && <a className="btn btn-sm btn-ghost" href={st.folder_url} target="_blank" rel="noreferrer">Abrir pasta no Drive</a>}
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+const EVENTS: [string, string][] = [['ready', 'Vídeo pronto'], ['review', 'Vídeo para revisar'], ['failed', 'Falhas'], ['published', 'Publicado no YouTube'], ['comments', 'Comentários novos'], ['daily', 'Resumo das 21h']]
+
+function NotifyCard({ enabled, muted, onChange }: { enabled: boolean; muted: string[]; onChange: (k: string, v: any) => void }) {
+  const { data: t } = useApi<{ topic: string; server: string }>('/notify/topic')
+  return (
+    <section className="card p-5 space-y-3">
+      <h3 className="font-semibold flex items-center gap-2"><Bell size={17} className="text-muted" /> Avisos no celular</h3>
+      <ol className="text-sm text-muted list-decimal pl-5 space-y-1">
+        <li>Instale o app grátis <b className="text-text">ntfy</b> (Play Store ou App Store) — não precisa de conta.</li>
+        <li>No app, toque em <b className="text-text">+</b> e assine o tópico: <code className="kbd text-[13px]! select-all">{t?.topic ?? '…'}</code></li>
+        <li>Ligue abaixo e toque em “Testar”.</li>
+      </ol>
+      <p className="text-xs text-faint">O nome do tópico é secreto e aleatório: só quem tiver ele recebe os avisos. Os avisos levam títulos de vídeos, nunca senhas ou chaves.</p>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={enabled} onChange={e => onChange('ntfy_enabled', e.target.checked)} /> Avisos ligados</label>
+      <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+        {EVENTS.map(([k, l]) => (
+          <label key={k} className={`flex items-center gap-1.5 text-[13px] ${enabled ? '' : 'opacity-50'}`}>
+            <input type="checkbox" disabled={!enabled} checked={!muted.includes(k)}
+              onChange={e => onChange('ntfy_muted', e.target.checked ? muted.filter(x => x !== k) : [...muted, k])} /> {l}</label>
+        ))}
+      </div>
+      <button className="btn btn-sm" onClick={() => act(() => api('/notify/test', { body: {} }), 'Aviso de teste enviado — confira o celular')}><Bell size={13} /> Testar</button>
+    </section>
   )
 }

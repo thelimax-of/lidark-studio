@@ -155,6 +155,12 @@ def trend_radar_all() -> None:
         enqueue("trend_radar", title=f"Radar de tendências: {names.get(cid, cid)}", channel_id=cid)
 
 
+def cloud_backup() -> None:
+    from .cloud import TOKEN
+    if TOKEN.exists():
+        enqueue("cloud_backup", title="Backup na nuvem (Google Drive)")
+
+
 def fetch_comments() -> None:
     enqueue("fetch_comments", title="Buscar comentários novos")
 
@@ -178,6 +184,9 @@ def start() -> None:
     _sched.add_job(fetch_comments, "interval", hours=2, id="comments", max_instances=1, coalesce=True,
                    next_run_time=datetime.now() + timedelta(minutes=8))
     _sched.add_job(backup_db, "cron", hour=3, minute=0, id="backup", max_instances=1, coalesce=True)
+    _sched.add_job(cloud_backup, "cron", hour=3, minute=20, id="cloud_backup", max_instances=1, coalesce=True)
+    from .notify import send_daily
+    _sched.add_job(send_daily, "cron", hour=21, minute=0, id="daily_summary", max_instances=1, coalesce=True)
     _sched.add_job(backup_db, "date", run_date=datetime.now() + timedelta(seconds=30), id="backup_boot")
     from .channels import sync_all
     _sched.add_job(sync_all, "interval", hours=12, id="sync", max_instances=1, coalesce=True)

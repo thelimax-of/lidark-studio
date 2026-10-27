@@ -194,6 +194,14 @@ def _run_inner(job: Job) -> None:
             return
         log.exception("job %s falhou", job.id)
         result, status, error = {}, "failed", f"{e}\n\n{traceback.format_exc()[-3000:]}"
+    if status == "failed" and job.kind in NOTIFY_FAILS:
+        try:
+            from . import notify
+            first = (error.split("\n")[0] if error else "")[:300]
+            notify.safe(f"❌ Falhou: {job.title[:80]}", first or "Veja os detalhes em Produção no painel.", event="failed",
+                        tags=["x"], priority=4)
+        except Exception:  # noqa: BLE001
+            pass
     with session() as s:
         j = s.get(Job, job.id)
         if j.status != "cancelled":
@@ -209,6 +217,7 @@ def _run_inner(job: Job) -> None:
         bus.publish("job", job_dict(j))
 
 
+NOTIFY_FAILS = {"render_video", "publish", "write_script", "autopilot", "cloud_backup", "shorts_from_long"}
 RETRY_MINUTES = 20
 MAX_RETRIES = 6
 

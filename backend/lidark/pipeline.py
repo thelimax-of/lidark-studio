@@ -95,16 +95,23 @@ def job_verify(ctx: JobContext) -> dict:
     r = content.verify_idea(ch, idea)
     with session() as s:
         idea = s.get(Idea, ctx.ref_id)
-        idea.fact_status = r["fact_status"]
-        idea.facts = r["facts"]
-        idea.sources = r["sources"]
-        if r.get("corrected_summary"):
-            idea.summary = r["corrected_summary"]
+        _apply_check(idea, r)
         s.add(idea)
         s.commit()
-    ctx.log(f"Checagem: {r['fact_status']} com {len(r['sources'])} fontes")
+    ctx.log(f"Checagem: {r['fact_status']} com {len(r['sources'])} fontes"
+            + (" — premissa falsa, mas vira pauta mito × verdade" if r.get("debunk") else ""))
     _enforce_facts(ctx.ref_id, ctx)
     return {"fact_status": r["fact_status"]}
+
+
+def _apply_check(idea: Idea, r: dict) -> None:
+    idea.fact_status, idea.facts, idea.sources = r["fact_status"], r["facts"], r["sources"]
+    if r.get("corrected_summary"):
+        idea.summary = r["corrected_summary"]
+    if r.get("debunk"):
+        d = r["debunk"]
+        idea.angle = f"Mito × verdade — muita gente acredita que {d['myth'][0].lower() + d['myth'][1:]} A verdade: {d['truth']}"
+        idea.tags = list(dict.fromkeys((idea.tags or []) + ["mito_verdade"]))
 
 
 def _enforce_facts(idea_id: int, ctx: JobContext | None = None) -> bool:
@@ -143,9 +150,7 @@ def job_audit_ideas(ctx: JobContext) -> dict:
             r = content.verify_idea(ch, idea)
             with session() as s:
                 db = s.get(Idea, iid)
-                db.fact_status, db.facts, db.sources = r["fact_status"], r["facts"], r["sources"]
-                if r.get("corrected_summary"):
-                    db.summary = r["corrected_summary"]
+                _apply_check(db, r)
                 s.add(db)
                 s.commit()
             stats["checadas"] += 1
@@ -173,9 +178,7 @@ def job_manual_idea(ctx: JobContext) -> dict:
     r = content.verify_idea(ch, idea)
     with session() as s:
         idea = s.get(Idea, ctx.ref_id)
-        idea.fact_status, idea.facts, idea.sources = r["fact_status"], r["facts"], r["sources"]
-        if r.get("corrected_summary"):
-            idea.summary = r["corrected_summary"]
+        _apply_check(idea, r)
         s.add(idea)
         s.commit()
     if _enforce_facts(idea.id, ctx):  # sua ideia também passa pela regra: sem confirmação nas fontes, sai
@@ -200,7 +203,16 @@ def job_write_script(ctx: JobContext) -> dict:
     if camp:
         extra0 = (extra0 + chr(10) + f"Este vídeo faz parte da campanha \"{camp['name']}\": {camp.get('focus')}").strip()
         ctx.payload["extra"] = extra0
-    data = content.write_script(ch, idea, fmt, extra0)
+    plan0 = None
+    if "mito_verdade" in (idea.tags or []):
+        from . import variety as _v
+        plan0 = _v.plan(ch, fmt)
+        plan0["structure"] = "mito_verdade"
+        extra0 = (extra0 + chr(10) + "ESTA PAUTA DESMENTE UM MITO: apresente a crença popular e mostre, com as provas das fontes, "
+                  "que ela é FALSA. Nunca afirme o mito como verdade. " + idea.summary).strip()
+        ctx.payload["extra"] = extra0  # a reescrita anti-repetição também mantém a instrução
+        ctx.log("Pauta mito × verdade: o roteiro vai desmentir a crença")
+    data = content.write_script(ch, idea, fmt, extra0, plan=plan0)
     from . import variety
     probs = variety.repetition_problems(ch.id, data.get("title", ""), data.get("hook", ""), data.get("scenes", []))
     if probs:  # trava anti-repetição: reescreve uma vez evitando o que ficou parecido
@@ -213,6 +225,15 @@ def job_write_script(ctx: JobContext) -> dict:
         ctx.log("Reescrito: sem repetições" if not left else "Ainda parecido em: " + " | ".join(left))
     if camp:
         data["variety"] = {**(data.get("variety") or {}), "series": camp["name"], "campaign": camp["id"]}
+    promised = (data.get("variety") or {}).get("next_idea")
+    if promised:
+        with session() as s:
+            nx = s.get(Idea, promised)
+            if nx:
+                nx.tags = list(dict.fromkeys((nx.tags or []) + ["prometida"]))
+                s.add(nx)
+                s.commit()
+                ctx.log(f"CTA anuncia o próximo vídeo: “{nx.title}” (vai ser produzido em seguida)")
     ctx.update(0.45, "Laboratório de gancho: testando aberturas")
     data = content.improve_hook(ch, data, data.get("variety") or {}, ctx.log)
     with session() as s:
@@ -361,6 +382,19 @@ def job_render(ctx: JobContext) -> dict:
             _schedule_publication(video.id, ctx.payload["publish_at"], ctx)
         else:
             ctx.log("Vídeo REPROVADO no inspetor — não foi agendado. Revise em Vídeos.")
+    from . import notify
+    when = ""
+    if ctx.payload.get("publish_at") and qa.get("passed"):
+        try:
+            from datetime import datetime as _dt
+            when = " · agendado para " + _dt.fromisoformat(ctx.payload["publish_at"]).astimezone().strftime("%d/%m %H:%M")
+        except ValueError:
+            pass
+    if qa.get("passed"):
+        notify.safe(f"🎬 Vídeo pronto · {ch.name}", f"{sc.title}{when}", event="ready", tags=["clapper"])
+    else:
+        notify.safe(f"⚠️ Vídeo para revisar · {ch.name}", f"{sc.title}\nO inspetor de qualidade reprovou — abra Vídeos no painel.",
+                    event="review", tags=["warning"], priority=4)
     return {"video_id": video.id, "qa": qa.get("passed")}
 
 
@@ -394,9 +428,13 @@ def job_autopilot(ctx: JobContext) -> dict:
         cands = [i for i in s.exec(q).all()
                  if (i.status == "approved" or (i.score or 0) >= ch.min_score_to_produce)]
     same = [i for i in cands if i.format == fmt]
+    promised = [i for i in same if "prometida" in (i.tags or [])]
+    if promised:  # o último vídeo anunciou esta pauta como "próximo vídeo": cumpre a promessa primeiro
+        same = promised
+        ctx.log(f"Produzindo a pauta prometida no vídeo anterior: {promised[0].title}")
     from . import growth
     camp = growth.wants_campaign(ch)
-    if camp:
+    if camp and not promised:
         in_camp = [i for i in same if growth.campaign_tag(camp) in (i.tags or [])]
         if in_camp:
             same = in_camp

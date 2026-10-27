@@ -65,6 +65,11 @@ def fetch_comments(ch: Channel, ctx: JobContext | None = None) -> int:
         suggest_replies(ch, ctx)
     if ctx:
         ctx.log(f"{len(new)} comentário(s) novo(s)")
+    waiting = [c for c in new if c.status == "new"]
+    if waiting:
+        from . import notify
+        notify.safe(f"💬 {len(waiting)} comentário(s) novo(s) · {ch.name}",
+                    "\n".join(f"{c.author}: {c.text[:90]}" for c in waiting[:4]), event="comments", tags=["speech_balloon"])
     return len(new)
 
 

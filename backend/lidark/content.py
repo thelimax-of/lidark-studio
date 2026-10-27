@@ -205,7 +205,13 @@ FONTES ENCONTRADAS:
 
 Liste as afirmações centrais da pauta e verifique cada uma SOMENTE com base nas fontes acima.
 Veredito: "confirmado" (2+ fontes concordam ou 1 fonte muito confiável), "parcial", "falso" ou "sem_fonte".
-Responda JSON: {{"facts": [{{"claim": "...", "verdict": "confirmado|parcial|falso|sem_fonte", "sources": [1,2], "note": "correção ou detalhe"}}], "overall": "verified|disputed|unverified", "corrected_summary": "resumo corrigido e preciso"}}"""
+
+DESMENTIDO DE MITO: se a premissa da pauta for FALSA, avalie se ela daria um bom vídeo DESMENTINDO uma crença
+popular (formato "mito × verdade": o vídeo responde "não" e mostra o que realmente aconteceu, com provas).
+Só vale se (1) a crença é de fato difundida entre o público, e (2) as fontes acima mostram claramente a verdade.
+Se a pauta só AFIRMA algo errado sem ser uma crença conhecida, "possible" é false.
+Responda JSON: {{"facts": [{{"claim": "...", "verdict": "confirmado|parcial|falso|sem_fonte", "sources": [1,2], "note": "correção ou detalhe"}}], "overall": "verified|disputed|unverified", "corrected_summary": "resumo corrigido e preciso",
+  "debunk": {{"possible": true/false, "popular": true/false, "myth": "a crença popular, em 1 frase", "truth": "o que as fontes mostram, com datas/nomes/números", "sources": [1,2]}}}}"""
     data = llm.complete_json(prompt, temperature=0.1)
     facts = []
     for f in data.get("facts", []):
@@ -218,9 +224,17 @@ Responda JSON: {{"facts": [{{"claim": "...", "verdict": "confirmado|parcial|fals
         status = "verified"
     else:
         status = "unverified"
-    return {"fact_status": status, "facts": facts,
-            "corrected_summary": data.get("corrected_summary", ""),
-            "sources": [{"title": s["title"], "url": s["url"], "kind": s["kind"]} for s in srcs]}
+    out = {"fact_status": status, "facts": facts,
+           "corrected_summary": data.get("corrected_summary", ""),
+           "sources": [{"title": s["title"], "url": s["url"], "kind": s["kind"]} for s in srcs]}
+    db = data.get("debunk") or {}
+    truth_src = [i for i in db.get("sources", []) if isinstance(i, int) and 1 <= i <= len(srcs)]
+    if status == "disputed" and db.get("possible") and db.get("popular") and db.get("truth") and db.get("myth") and truth_src:
+        # premissa falsa, mas é um mito conhecido e as fontes mostram a verdade → vira pauta "mito × verdade"
+        out.update(fact_status="verified", debunk={"myth": db["myth"], "truth": db["truth"],
+                                                   "sources": [srcs[i - 1]["url"] for i in truth_src]},
+                   corrected_summary=f"MITO: {db['myth']} VERDADE: {db['truth']}")
+    return out
 
 
 # ================================================================ ROTEIRO
@@ -230,6 +244,10 @@ def write_script(ch: Channel, idea: Idea, fmt: str | None = None, extra: str = "
     from . import variety
     fmt = fmt or idea.format
     plan = plan or variety.plan(ch, fmt)
+    if str(plan.get("cta_style")) == variety.NEXT_CTA and not plan.get("next_title"):
+        nxt = variety.next_idea(ch, idea.id, fmt)
+        if nxt:
+            plan = {**plan, "next_idea": nxt.id, "next_title": nxt.title}
     seconds = plan.get("seconds") or (ch.short_seconds if fmt == "short" else ch.long_minutes * 60)
     words = target_words(ch, fmt, plan.get("seconds"))
     dossier = research.gather_dossier(idea.title, max_sources=5)

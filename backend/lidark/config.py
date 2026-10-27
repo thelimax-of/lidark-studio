@@ -32,6 +32,10 @@ DEFAULTS: dict[str, Any] = {
     "glm_api_key": "",
     "glm_base_url": "https://api.z.ai/api/paas/v4",
     "glm_model": "glm-4.5-flash",
+    "ntfy_enabled": False,  # avisos no celular (app ntfy)
+    "ntfy_server": "https://ntfy.sh",
+    "ntfy_topic": "",
+    "ntfy_muted": [],  # eventos silenciados: ready, review, failed, published, comments, daily
     "glm_vision_models": ["glm-4.6v-flash", "glm-4.6v-flashx"],  # reserva de visão: grátis, depois o barato
     "ollama_url": "http://127.0.0.1:11434",
     "ollama_model": "qwen3:8b",
