@@ -145,7 +145,7 @@ def _trim(x, thr: float = 0.012) -> tuple[Any, int]:
     if not len(idx):
         return x[:0], 0
     a, b = max(0, idx[0] - int(0.02 * SR)), min(len(x), idx[-1] + int(0.06 * SR))
-    return x[a:b], a
+    return x[a:b], int(a)
 
 
 def synthesize_directed(scenes: list[str], out: Path, voice: str, rate: str = "+0%") -> dict[str, Any]:
@@ -168,9 +168,9 @@ def synthesize_directed(scenes: list[str], out: Path, voice: str, rate: str = "+
         t += gap
         off = t - cut / SR
         for w in r.get("words") or []:
-            words.append({"w": w["w"], "start": max(t, w["start"] + off), "end": max(t, w["end"] + off)})
+            words.append({"w": w["w"], "start": float(max(t, w["start"] + off)), "end": float(max(t, w["end"] + off))})
         pcm.append(x.astype(np.float32))
-        t += len(x) / SR
+        t = float(t + len(x) / SR)
     audio = np.concatenate(pcm + [np.zeros(int(0.15 * SR), np.float32)])
     wav = out.with_suffix(".wav")
     with wave.open(str(wav), "wb") as w:

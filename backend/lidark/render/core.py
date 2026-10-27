@@ -25,6 +25,9 @@ class Word:
     end: float
     hi: bool = False  # destaque dourado
 
+    def __post_init__(self):
+        self.start, self.end = float(self.start), float(self.end)
+
 
 @dataclass
 class SceneT:
@@ -39,6 +42,9 @@ class SceneT:
     fx: str = ""  # efeito pedido pelo roteiro (mito | verdade)
     graphic: dict | None = None  # cena animada com dados: {"kind": "timeline", "data": {...}}
     clip: Any = None  # filmagem real da cena (Clip) — quando existe, toca no lugar da foto
+
+    def __post_init__(self):
+        self.start, self.end = float(self.start), float(self.end)
 
 
 class Clip:
@@ -118,6 +124,7 @@ def font(name: str, size: int, weight: int | None = None) -> ImageFont.FreeTypeF
 
 
 def clamp(x: float, a: float = 0.0, b: float = 1.0) -> float:
+    x = float(x)
     return a if x < a else b if x > b else x
 
 
@@ -166,7 +173,7 @@ def shadow(w: int, h: int, r: int, blur: int, alpha: int = 140, spread: int = 0)
     pad = blur * 3
     img = Image.new("RGBA", (w + pad * 2, h + pad * 2), (0, 0, 0, 0))
     ImageDraw.Draw(img).rounded_rectangle((pad - spread, pad - spread, pad + w + spread, pad + h + spread), r, fill=(0, 0, 0, alpha))
-    return img.filter(ImageFilter.GaussianBlur(blur))
+    return img.filter(ImageFilter.GaussianBlur(float(blur)))
 
 
 def supersampled(w: int, h: int, draw_fn: Callable[[ImageDraw.ImageDraw, float], None], ss: int = 3) -> Image.Image:

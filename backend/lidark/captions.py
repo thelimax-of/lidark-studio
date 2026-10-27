@@ -100,4 +100,4 @@ def word_timeline(text: str, audio_path: str, total: float, tts_words: list | No
             out.append({"w": w, "start": cur, "end": cur + d})
             cur += d
         return out
-    return align(words, timed, total)
+    return [{"w": r["w"], "start": float(r["start"]), "end": float(r["end"])} for r in align(words, timed, float(total))]

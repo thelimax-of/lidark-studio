@@ -356,7 +356,7 @@ class LivreTemplate(OuroTemplate):
             bl = math.sin(math.pi * p) * 18
             mix = Image.blend(a, b, e)
             if bl > 1:
-                small = mix.resize((W // 4, H // 4), Image.BILINEAR).filter(ImageFilter.GaussianBlur(bl / 4))
+                small = mix.resize((W // 4, H // 4), Image.BILINEAR).filter(ImageFilter.GaussianBlur(float(bl / 4)))
                 mix = small.resize((W, H), Image.BILINEAR)
             return mix
         if kind == "wipe":  # cortina diagonal com fio de luz

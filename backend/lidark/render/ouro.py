@@ -85,7 +85,7 @@ class OuroTemplate:
         # vinheta interna suave
         vig = Image.new("L", (w, h), 0)
         ImageDraw.Draw(vig).rounded_rectangle((0, 0, w, h), r, outline=60, width=int(40 * k))
-        vig = vig.filter(ImageFilter.GaussianBlur(30 * k))
+        vig = vig.filter(ImageFilter.GaussianBlur(float(30 * k)))
         dark = Image.new("RGBA", (w, h), (120, 95, 60, 255))
         body = Image.composite(dark, body, vig.point(lambda v: int(v * 0.35)))
         body.putalpha(rounded_mask(w, h, r))

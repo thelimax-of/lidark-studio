@@ -107,7 +107,7 @@ def apply_enter(img: Image.Image, kind: str, p: float) -> tuple[Image.Image | No
         return _develop(img, ease_in_out(p)), 0, 0, clamp(p * 6)
     if kind == "blur_in":
         r = 14 * (1 - ease_out_cubic(p))
-        im = img.filter(ImageFilter.GaussianBlur(r)) if r > 0.6 else img
+        im = img.filter(ImageFilter.GaussianBlur(float(r))) if r > 0.6 else img
         return _scale(im, 1.06 - 0.06 * ease_out_cubic(p)), 0, 0, clamp(p * 3)
     if kind == "iris":
         return _iris(img, ease_out_cubic(p)), 0, 0, 1
@@ -197,7 +197,7 @@ class Particles:
         s = r * 4
         img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
         ImageDraw.Draw(img).ellipse((s / 2 - r / 2, s / 2 - r / 2, s / 2 + r / 2, s / 2 + r / 2), fill=(*color, 255))
-        return img.filter(ImageFilter.GaussianBlur(r / 2.2))
+        return img.filter(ImageFilter.GaussianBlur(float(r / 2.2)))
 
     def draw(self, out: Image.Image, t: float) -> None:
         for x0, y0, speed, tw, ph, si in self.p:

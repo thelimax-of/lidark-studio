@@ -131,7 +131,7 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
         idx += n
         words += ws
         scene_words.append(ws)
-    narration_end = max(narr_dur, words[-1].end if words else narr_dur)
+    narration_end = float(max(narr_dur, words[-1].end if words else narr_dur))
     if ch.voice_provider == "edge" and voice.get("words") and len(voice["words"]) < len(timed) * 0.7:
         ctx.log("Aviso: poucos tempos do TTS, alinhamento estimado")
 
@@ -252,7 +252,7 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
         clip = Clip(picks[i]["clip"]) if (picks[i] or {}).get("clip") else None
         scene_ts.append(SceneT(i, start, 0, s["text"], images[i], label[:28], step, ws, str(s.get("fx") or ""), graphic, clip))
     for i, st in enumerate(scene_ts):
-        st.end = scene_ts[i + 1].start if i + 1 < n else narration_end
+        st.end = float(scene_ts[i + 1].start if i + 1 < n else narration_end)
     # a tela final pode completar no máximo 3s (nunca fica repetindo o encerramento)
     duration = narration_end + OUTRO_SECONDS + min(3.0, max(0.0, min_total - narration_end - OUTRO_SECONDS))
     if vertical and duration < 60:
