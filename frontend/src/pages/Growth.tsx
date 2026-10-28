@@ -7,8 +7,13 @@ import { act, fmtNum, SectionTitle } from '../ui'
 
 type Tier = { label: string; subs: number; hours: number; shorts_views: number; eta_days: number | null; eta_date: string | null
   subs_eta: number | null; hours_eta: number | null; shorts_eta: number | null; shorts_per_day_needed: number }
+type TierKey = 'basic' | 'full' | 'full_2027'
+// shorts_views_90d = views QUALIFICADAS (engajadas, sem anúncio pago); os campos *_raw/_engaged/_ads mostram de onde vem
 type Ypp = { connected: boolean; error?: string; subs: number; hours_12m: number; shorts_views_90d: number
-  rates: { subs_per_day: number; hours_per_day: number; shorts_views_per_day: number }; tiers: Record<'basic' | 'full', Tier>; updated_at?: string }
+  shorts_raw_views_90d?: number; shorts_engaged_views_90d?: number; shorts_ads_views_90d?: number; shorts_feed_engaged_90d?: number
+  engaged_rate?: number | null; engaged_estimated?: boolean; notes?: string[]
+  rates: { subs_per_day: number; hours_per_day: number; shorts_views_per_day: number; shorts_raw_views_per_day?: number }
+  tiers: Partial<Record<TierKey, Tier>>; updated_at?: string }
 
 function Meter({ label, have, need, sub }: { label: string; have: number; need: number; sub: string }) {
   const p = Math.min(1, have / need)
@@ -28,10 +33,13 @@ const when = (d: number | null) => d === 0 ? 'atingido' : d == null ? 'fora do r
 
 export function YppCard({ channelId, compact }: { channelId: number; compact?: boolean }) {
   const { data: y } = useApi<Ypp>(`/channels/${channelId}/ypp`)
-  const [tier, setTier] = useState<'basic' | 'full'>('full')
+  const [tier, setTier] = useState<TierKey>('full')
   if (!y || !y.connected) return null
   if (!y.tiers) return <section className="card p-4 text-[13px] text-muted">Monetização: {y.error || 'sem dados ainda'}</section>
-  const t = y.tiers[tier]
+  // a regra "full" expira em 01/02/2027 (o backend deixa de mandar); cai na regra nova
+  const t = y.tiers[tier] ?? y.tiers.full_2027 ?? y.tiers.full ?? y.tiers.basic
+  if (!t) return null
+  const raw = y.shorts_raw_views_90d
   const eta = t.eta_date ? new Date(t.eta_date + 'T12:00').toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }) : null
   return (
     <section className="card overflow-hidden">
@@ -39,7 +47,9 @@ export function YppCard({ channelId, compact }: { channelId: number; compact?: b
         action={<div className="flex items-center gap-2">
           <div className="seg">
             <button data-active={tier === 'basic'} onClick={() => setTier('basic')}>Básico</button>
-            <button data-active={tier === 'full'} onClick={() => setTier('full')}>Anúncios</button>
+            {y.tiers.full && <button data-active={tier === 'full'} onClick={() => setTier('full')} data-tip={y.tiers.full.label}>Anúncios</button>}
+            {y.tiers.full_2027 && <button data-active={tier === 'full_2027' || (!y.tiers.full && tier === 'full')} onClick={() => setTier('full_2027')}
+              data-tip={y.tiers.full_2027.label}>Anúncios 2027</button>}
           </div>
           {!compact && <button className="btn btn-sm btn-icon btn-ghost" data-tip="Atualizar agora"
             onClick={() => act(() => api(`/channels/${channelId}/ypp?refresh=true`)).then(() => invalidate(`/channels/${channelId}/ypp`))}><RefreshCw size={14} /></button>}
@@ -48,7 +58,7 @@ export function YppCard({ channelId, compact }: { channelId: number; compact?: b
       </SectionTitle>
       <div className="p-4 grid md:grid-cols-[1fr_1fr_1fr_auto] gap-5 items-start">
         <Meter label="Inscritos" have={y.subs} need={t.subs} sub={`+${y.rates.subs_per_day.toFixed(1)}/dia · ${when(t.subs_eta)}`} />
-        <Meter label="Views de Shorts (90 dias)" have={y.shorts_views_90d} need={t.shorts_views}
+        <Meter label="Views engajadas de Shorts (90 dias)" have={y.shorts_views_90d} need={t.shorts_views}
           sub={`${fmtNum(y.rates.shorts_views_per_day)}/dia hoje · precisa ~${fmtNum(t.shorts_per_day_needed)}/dia`} />
         <Meter label="Horas em vídeos longos (12 meses)" have={y.hours_12m} need={t.hours} sub={`${y.rates.hours_per_day.toFixed(1)} h/dia · ${when(t.hours_eta)}`} />
         <div className="md:w-44 md:border-l md:border-line md:pl-5">
@@ -57,7 +67,22 @@ export function YppCard({ channelId, compact }: { channelId: number; compact?: b
           <div className="text-[11.5px] text-faint mt-0.5 leading-snug">{eta ? 'no ritmo dos últimos 28 dias' : 'o ritmo atual ainda não chega lá; precisa acelerar'}</div>
         </div>
       </div>
-      {!compact && <div className="px-4 pb-3 text-[11.5px] text-faint">Basta inscritos + UM dos caminhos (Shorts ou horas). As horas dos Shorts não contam para as horas dos vídeos longos.</div>}
+      {raw != null && (
+        <div className="px-4 pb-3 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-muted">
+          <span>Shorts 90 dias: <b className="num font-semibold text-text">{fmtNum(raw)}</b> views</span>
+          <span data-tip="Contam p/ monetizar (sem as vindas de anúncio pago)">
+            <b className="num font-semibold text-text">{fmtNum(y.shorts_views_90d)}</b> views engajadas (contam p/ monetizar)
+          </span>
+          {y.engaged_rate != null && <span>taxa engajada <b className="num font-semibold text-text">{y.engaged_rate}%</b></span>}
+          {!!y.shorts_ads_views_90d && <span className="text-warn">{fmtNum(y.shorts_ads_views_90d)} views de anúncio pago (não contam)</span>}
+          {y.shorts_feed_engaged_90d != null && <span data-tip="Só o feed do Shorts divide receita de anúncios">feed do Shorts: {fmtNum(y.shorts_feed_engaged_90d)} engajadas</span>}
+          {y.engaged_estimated && <span className="text-faint">(views engajadas indisponíveis — usando views brutas)</span>}
+        </div>
+      )}
+      {!compact && <div className="px-4 pb-3 text-[11.5px] text-faint space-y-0.5">
+        <div>Basta inscritos + UM dos caminhos (Shorts ou horas). As horas dos Shorts não contam para as horas dos vídeos longos.</div>
+        {(y.notes || []).map(n => <div key={n}>{n}</div>)}
+      </div>}
     </section>
   )
 }

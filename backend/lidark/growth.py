@@ -24,10 +24,8 @@ def _look(key: str) -> Callable[[dict], Any]:
 
 
 def _secs(p: dict) -> str | None:
-    s = p.get("seconds")
-    if not s:
-        return None
-    return "61–66s" if s <= 66 else ("67–72s" if s <= 72 else "73s+")
+    from .variety import duration_band
+    return duration_band(p.get("seconds"))  # mesma faixa (curto/medio/longo) que o sorteio usa
 
 
 DIMENSIONS: dict[str, tuple[str, Callable[[dict], Any]]] = {
@@ -53,6 +51,7 @@ LABELS: dict[str, dict[str, str]] = {
     "caption": {"classic": "Caixa clássica", "highlight": "Pílula na palavra", "karaoke": "Karaokê", "bold": "Palavra a palavra"},
     "intro": {"typed": "Texto digitado", "words": "Palavra gigante", "band": "Faixa de cinema", "punch": "Zoom com flash"},
     "outro": {"classic": "Clássico", "handle": "@ gigante", "minimal": "Minimalista"},
+    "duration": {"curto": "Curto (até 38s)", "medio": "Médio (39–50s)", "longo": "Longo (51s+)"},
 }
 
 MIN_N = 2  # mínimo de vídeos por opção para considerar o resultado
@@ -194,18 +193,57 @@ def wants_campaign(ch: Channel) -> dict[str, Any] | None:
 
 # ================================================================ progresso para a monetização (YPP)
 
+# Limites da Central de Ajuda do YouTube ("Shorts monetization policies" / requisitos do YPP), conferidos em 10/2026.
+# São regras de política, não dados da API: podem mudar — revise aqui se o YouTube anunciar outra coisa.
+# - Shorts contam por VIEWS ENGAJADAS (desde 31/03/2025 "views" conta todo início/replay e não serve p/ monetizar);
+# - views de anúncio pago (tráfego ADVERTISING), Shorts privados/não listados e bots não são views qualificadas;
+# - só views do feed do Shorts dividem receita de anúncios;
+# - a partir de 01/02/2027: novas inscrições precisam de 20 mi de views qualificadas de Shorts em 90 dias (ou 8.000 h)
+#   e quem já é parceiro precisa manter 10 mi/90 dias para continuar na divisão de receita dos Shorts.
+RULES_2027 = date(2027, 2, 1)
 YPP = {
     "basic": {"label": "Nível básico (Clube, Super Thanks, compras)", "subs": 500, "hours": 3000, "shorts_views": 3_000_000},
-    "full": {"label": "Monetização completa (anúncios)", "subs": 1000, "hours": 4000, "shorts_views": 10_000_000},
+    "full": {"label": "Monetização completa (anúncios) — regra até 31/01/2027", "subs": 1000, "hours": 4000,
+             "shorts_views": 10_000_000, "until": (RULES_2027 - timedelta(days=1)).isoformat()},
+    "full_2027": {"label": "Monetização completa — novas inscrições a partir de 01/02/2027", "subs": 1000, "hours": 8000,
+                  "shorts_views": 20_000_000, "from": RULES_2027.isoformat()},
 }
+YPP_KEEP_SHORTS_2027 = 10_000_000  # parceiro precisa manter isso em 90 dias p/ seguir com receita de Shorts (desde 01/02/2027)
+YPP_NOTES = [
+    "Shorts: só conta a view ENGAJADA (o número “views” do YouTube inclui todo início/replay).",
+    "Views vindas de anúncio pago (promoção) não são qualificadas — ficam fora do progresso.",
+    "Só views do feed do Shorts dividem receita de anúncios.",
+    "A partir de 01/02/2027: 20 mi views qualificadas/90 dias (ou 8.000 h) p/ entrar; parceiros precisam manter 10 mi/90 dias.",
+    "Limites tirados da Central de Ajuda do YouTube — podem mudar; o YouTube confirma tudo na revisão do canal.",
+]
 
 
 def _by_type(ya, start: date, end: date) -> dict[str, dict[str, float]]:
-    r = ya.reports().query(ids="channel==MINE", startDate=start.isoformat(), endDate=end.isoformat(),
-                           metrics="views,estimatedMinutesWatched", dimensions="creatorContentType").execute()
+    """Por tipo de conteúdo: views brutas, engajadas, qualificadas (engajadas sem anúncio pago) e minutos."""
+    q = dict(ids="channel==MINE", startDate=start.isoformat(), endDate=end.isoformat(),
+             dimensions="creatorContentType,insightTrafficSourceType")
+    try:
+        rows = ya.reports().query(metrics="views,engagedViews,estimatedMinutesWatched", **q).execute().get("rows", []) or []
+    except Exception as e:  # noqa: BLE001  (sem engagedViews: usa as views brutas, marcado como estimativa)
+        log.warning("ypp engagedViews: %s", e)
+        rows = [[t, src, v, None, m] for t, src, v, m in
+                ya.reports().query(metrics="views,estimatedMinutesWatched", **q).execute().get("rows", []) or []]
     out: dict[str, dict[str, float]] = {}
-    for t, v, m in r.get("rows", []) or []:
-        out[str(t).lower()] = {"views": float(v), "minutes": float(m)}
+    for t, src, v, e, m in rows:
+        d = out.setdefault(str(t).lower(), {"views": 0.0, "engaged": 0.0, "qualified": 0.0, "minutes": 0.0,
+                                            "minutes_qualified": 0.0, "ads_views": 0.0, "feed_engaged": 0.0,
+                                            "estimated": e is None})
+        eng = float(v if e is None else e)
+        d["views"] += float(v)
+        d["engaged"] += eng
+        d["minutes"] += float(m)
+        if src == "ADVERTISING":  # promoção paga: não é view qualificada
+            d["ads_views"] += float(v)
+        else:
+            d["qualified"] += eng
+            d["minutes_qualified"] += float(m)
+        if src == "SHORTS":  # feed do Shorts: o único que divide receita de anúncios
+            d["feed_engaged"] += eng
     return out
 
 
@@ -223,16 +261,17 @@ def ypp_status(ch: Channel) -> dict[str, Any]:
     d90 = _by_type(ya, today - timedelta(days=90), today)
     d28 = _by_type(ya, today - timedelta(days=28), today)
 
-    def long_minutes(d: dict) -> float:
-        return sum(v["minutes"] for k, v in d.items() if "short" not in k)
+    def longs(d: dict, k: str = "minutes_qualified") -> float:
+        return sum(v[k] for t, v in d.items() if "short" not in t)
 
-    def short_views(d: dict) -> float:
-        return sum(v["views"] for k, v in d.items() if "short" in k)
+    def shorts(d: dict, k: str = "qualified") -> float:
+        return sum(v[k] for t, v in d.items() if "short" in t)
 
-    hours = long_minutes(y365) / 60
-    shorts90 = short_views(d90)
-    hours_rate = long_minutes(d28) / 60 / 28  # horas/dia
-    shorts_rate = short_views(d28) / 28  # views/dia
+    # horas: vídeos longos sem anúncio pago; Shorts: views engajadas sem anúncio pago
+    hours = longs(y365) / 60
+    shorts90 = shorts(d90)
+    hours_rate = longs(d28) / 60 / 28  # horas/dia
+    shorts_rate = shorts(d28) / 28  # views qualificadas/dia
     try:
         subs_rate = sum(r["subs"] for r in daily_analytics(ch.id, 28)["rows"]) / 28
     except Exception:  # noqa: BLE001
@@ -246,6 +285,8 @@ def ypp_status(ch: Channel) -> dict[str, Any]:
 
     tiers = {}
     for key, t in YPP.items():
+        if t.get("until") and today.isoformat() > t["until"]:
+            continue  # regra antiga já expirou
         subs_eta = eta(subs, t["subs"], subs_rate)
         hours_eta = eta(hours, t["hours"], hours_rate)
         # janela móvel de 90 dias: no ritmo atual, a janela estabiliza em 90 × views/dia
@@ -256,9 +297,17 @@ def ypp_status(ch: Channel) -> dict[str, Any]:
         tiers[key] = {**t, "subs_eta": subs_eta, "hours_eta": hours_eta, "shorts_eta": shorts_eta,
                       "eta_days": total, "eta_date": (today + timedelta(days=total)).isoformat() if total is not None else None,
                       "shorts_per_day_needed": round(t["shorts_views"] / 90)}
+    raw90, eng90 = shorts(d90, "views"), shorts(d90, "engaged")
     return {"connected": True, "updated_at": datetime.now(timezone.utc).isoformat(), "subs": subs, "hours_12m": round(hours, 1),
-            "shorts_views_90d": int(shorts90), "rates": {"subs_per_day": round(subs_rate, 2), "hours_per_day": round(hours_rate, 2),
-                                                         "shorts_views_per_day": round(shorts_rate)},
+            "hours_12m_raw": round(longs(y365, "minutes") / 60, 1),
+            # shorts_views_90d = views QUALIFICADAS (engajadas, sem anúncio pago) — é o que vale p/ o YPP
+            "shorts_views_90d": int(shorts90), "shorts_raw_views_90d": int(raw90), "shorts_engaged_views_90d": int(eng90),
+            "shorts_ads_views_90d": int(shorts(d90, "ads_views")), "shorts_feed_engaged_90d": int(shorts(d90, "feed_engaged")),
+            "engaged_rate": round(100 * eng90 / raw90, 1) if raw90 else None,
+            "engaged_estimated": any(v.get("estimated") for v in d90.values()),
+            "rates": {"subs_per_day": round(subs_rate, 2), "hours_per_day": round(hours_rate, 2),
+                      "shorts_views_per_day": round(shorts_rate), "shorts_raw_views_per_day": round(shorts(d28, "views") / 28)},
+            "keep_shorts_2027": YPP_KEEP_SHORTS_2027, "rules_from": RULES_2027.isoformat(), "notes": YPP_NOTES,
             "tiers": tiers}
 
 

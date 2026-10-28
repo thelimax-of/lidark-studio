@@ -30,8 +30,9 @@ def handler(kind: str):
     return deco
 
 
-class Cancelled(Exception):
-    pass
+class Cancelled(BaseException):
+    """BaseException de propósito: os vários `except Exception` da busca de imagens/IA não podem engolir o cancelamento
+    (antes engoliam, e uma tarefa cancelada continuava trabalhando por minutos)."""
 
 
 # ---------------------------------------------------------------- eventos (SSE)
@@ -89,7 +90,13 @@ class JobContext:
         self.ref_id = job.ref_id
         self._last_emit = 0.0
 
+    def check(self) -> None:
+        """Sai na hora se a tarefa foi cancelada (só memória, sem ir ao banco — pode chamar em laços)."""
+        if self.job_id in _cancelled:
+            raise Cancelled()
+
     def update(self, progress: float | None = None, stage: str | None = None, log_line: str | None = None) -> None:
+        self.check()
         with session() as s:
             j = s.get(Job, self.job_id)
             if j is None:
@@ -162,7 +169,15 @@ def cancel(job_id: int) -> None:
             j.status = "cancelled"
             j.finished_at = now()
             s.add(j)
+            # vídeo em produção some da lista na hora (não fica "renderizando" até a thread perceber)
+            vid = (j.payload or {}).get("_video_id") if j.kind == "render_video" else None
+            if vid:
+                from .models import Video
+                v = s.get(Video, vid)
+                if v and v.status == "rendering":
+                    s.delete(v)
             s.commit()
+            _cancelled.add(job_id)
             bus.publish("job", job_dict(j))
 
 
@@ -172,6 +187,7 @@ _wake = threading.Event()
 _claim_lock = threading.Lock()
 _draining = threading.Event()  # reinício pedido: não pega tarefas novas
 _running: set[int] = set()
+_cancelled: set[int] = set()  # canceladas que ainda podem ter thread rodando
 
 
 def _claim(heavy: bool) -> Job | None:
@@ -209,13 +225,16 @@ def _run(job: Job) -> None:
         _run_inner(job)
     finally:
         _running.discard(job.id)
+        _cancelled.discard(job.id)
         _keep_awake(False)
 
 
-# ---------------------------------------------------------------- reinício seguro
-
 def restart_status() -> dict[str, Any]:
-    return {"draining": _draining.is_set(), "running": sorted(_running)}
+    # cancelada não segura o reinício nem aparece como rodando, mesmo se a thread ainda não terminou
+    return {"draining": _draining.is_set(), "running": sorted(_running - _cancelled)}
+
+
+# ---------------------------------------------------------------- reinício seguro
 
 
 def request_restart(when_idle: bool = True, max_wait_light: float = 900) -> dict[str, Any]:
@@ -230,7 +249,7 @@ def request_restart(when_idle: bool = True, max_wait_light: float = 900) -> dict
         t0 = time.time()
         while when_idle:
             with session() as s:
-                busy = [s.get(Job, i) for i in list(_running)]
+                busy = [s.get(Job, i) for i in list(_running - _cancelled)]
             heavy = [j for j in busy if j and j.kind in HEAVY_KINDS]
             if not busy or (not heavy and time.time() - t0 > max_wait_light):
                 break

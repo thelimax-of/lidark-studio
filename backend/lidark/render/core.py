@@ -93,6 +93,7 @@ class Timeline:
     envelope: np.ndarray  # volume da narração por quadro (0..1) → boca do mascote
     theme: dict[str, Any]
     fmt: str = "short"
+    hook: str = ""  # frase curta de gancho (texto da miniatura): legível já no 1º quadro dos Shorts
 
     def scene_at(self, t: float) -> SceneT:
         for s in self.scenes:
@@ -115,6 +116,14 @@ def rgba(h: str, a: int = 255) -> tuple[int, int, int, int]:
 @functools.lru_cache(maxsize=64)
 def font(name: str, size: int, weight: int | None = None) -> ImageFont.FreeTypeFont:
     f = ImageFont.truetype(str(FONTS / name), size)
+    if not weight:
+        # fonte variável cujo padrão é fino (Montserrat abre em 100, Nunito em 200): sem peso, a legenda saía um fio
+        try:
+            ax = f.get_variation_axes()
+            if ax and ax[0].get("default", 400) < 400:
+                weight = min(700, ax[0].get("maximum", 700))
+        except Exception:  # noqa: BLE001
+            pass
     if weight:
         try:
             f.set_variation_by_axes([weight])

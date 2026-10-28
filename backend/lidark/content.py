@@ -44,6 +44,13 @@ def learning_context(channel_id: int, limit: int = 8) -> str:
     if retention:
         parts.append("LIÇÕES DE RETENÇÃO (dados reais de quanto o público assiste — siga à risca):" + chr(10) +
                      chr(10).join(f"- {i.text}" for i in retention))
+    try:  # regras calculadas em código a partir das quedas por cena (complementam as lições da IA)
+        from .retention import retention_rules_prompt
+        rules = retention_rules_prompt(channel_id)
+        if rules:
+            parts.append(rules)
+    except Exception:  # noqa: BLE001
+        log.exception("regras de retenção")
     try:
         from .growth import experiments
         lessons = experiments(channel_id).get("lessons", [])
@@ -248,7 +255,7 @@ def write_script(ch: Channel, idea: Idea, fmt: str | None = None, extra: str = "
         nxt = variety.next_idea(ch, idea.id, fmt)
         if nxt:
             plan = {**plan, "next_idea": nxt.id, "next_title": nxt.title}
-    seconds = plan.get("seconds") or (ch.short_seconds if fmt == "short" else ch.long_minutes * 60)
+    seconds = plan.get("seconds") or ((ch.short_seconds or 45) if fmt == "short" else ch.long_minutes * 60)
     words = target_words(ch, fmt, plan.get("seconds"))
     dossier = research.gather_dossier(idea.title, max_sources=5)
     material = "\n\n".join(f"[{i + 1}] {s['title']} ({s['url']})\n{s['text'][:3000]}"
@@ -279,7 +286,7 @@ FONTES DE PESQUISA:
 {('INSTRUÇÕES EXTRAS: ' + extra) if extra else ''}
 
 Escreva o roteiro de um vídeo {'CURTO VERTICAL' if fmt == 'short' else 'LONGO HORIZONTAL'} com NO MÍNIMO {words} palavras de narração no total (≈{seconds}s) — conte as palavras; roteiro curto é reprovado.
-Use {'9 a 12' if fmt == 'short' else '25 a 40'} cenas.
+Use {f'{max(6, int(seconds) // 5)} a {max(6, int(seconds) // 5) + 3}' if fmt == 'short' else '25 a 40'} cenas.{' Short enxuto: sem enrolação nem cena de preenchimento — cada frase precisa segurar o público até o fim.' if fmt == 'short' else ''}
 REGRAS:
 - Primeira frase = GANCHO brutal no estilo pedido em VARIEDADE, sem "Olá", sem "Você sabia" genérico.
 - Frases curtas, linguagem falada brasileira, ritmo acelerado, um fato surpreendente a cada ~10s.
@@ -519,15 +526,17 @@ def clean_ending(scenes: list[dict[str, Any]], cta: str = "") -> list[dict[str, 
     last = dict(scenes[-1])
     sents = [x for x in re.split(r"(?<=[.!?…])\s+", (last.get("text") or "").strip()) if x]
     cta_key = " ".join(cta.lower().split()[:3])
+    # palavra inteira: "persegue"/"consegue" não são CTA
+    cta_re = re.compile(r"\b(" + "|".join(re.escape(w) for w in CTA_WORDS) + r")\b")
 
     def is_cta(snt: str) -> bool:
         low = snt.lower()
-        return any(w in low for w in CTA_WORDS) or (cta_key and cta_key in low)
+        return bool(cta_re.search(low)) or bool(cta_key and cta_key in low)
 
-    for i, snt in enumerate(sents):
-        if is_cta(snt):
-            sents = sents[:i + 1]
-            break
+    # corta depois da ÚLTIMA frase de CTA: CTA de duas frases ("Comenta aí... Segue o canal!") fica inteiro
+    hits = [i for i, snt in enumerate(sents) if is_cta(snt)]
+    if hits:
+        sents = sents[:hits[-1] + 1]
     while len(sents) > 1 and sents[-1].rstrip().endswith(("...", "…")):
         sents.pop()
     if sents and sents[-1].rstrip().endswith(("...", "…")):
@@ -549,7 +558,7 @@ def speech_rate(ch: Channel) -> float:
 
 
 def target_words(ch: Channel, fmt: str, seconds: float | None = None) -> int:
-    seconds = seconds or ((ch.short_seconds or 65) if fmt == "short" else (ch.long_minutes or 6) * 60)
+    seconds = seconds or ((ch.short_seconds or 45) if fmt == "short" else (ch.long_minutes or 6) * 60)
     return int((seconds - OUTRO_SECONDS) * speech_rate(ch)) + 4
 
 
@@ -559,26 +568,34 @@ def count_words(scenes: list[dict[str, Any]]) -> int:
 
 def expand_script(ch: Channel, title: str, scenes: list[dict[str, Any]], missing: int,
                   facts_hint: str = "") -> list[dict[str, Any]]:
-    """Acrescenta cenas novas (fatos reais) antes do final para atingir a duração mínima."""
+    """Acrescenta cenas novas (fatos reais) no MEIO da história, antes do fechamento, para atingir a duração mínima.
+
+    O fechamento (virada/frase de loop + CTA) costuma ocupar as 2 últimas cenas; as cenas novas entram antes dele,
+    no código — se a IA as colocasse entre a frase de fechamento e o CTA, o vídeo "terminava" duas vezes."""
     n_new = max(1, round(missing / 18))
+    keep = 2 if len(scenes) >= 5 else 1
+    body, closing = scenes[:-keep], scenes[-keep:]
     prompt = f"""{channel_brief(ch)}
 
 O roteiro abaixo ("{title}") está CURTO: faltam cerca de {missing} palavras de narração.
-Acrescente {n_new} cena(s) NOVA(S) com fatos REAIS, específicos e surpreendentes sobre o mesmo tema
-(datas, nomes, números, consequências, curiosidades pouco conhecidas), inseridas ANTES da cena final.
-Não repita o que já foi dito, não altere o gancho nem a cena final (CTA). Cada cena nova com 15-25 palavras,
+Escreva {n_new} cena(s) NOVA(S) com fatos REAIS, específicos e surpreendentes sobre o mesmo tema
+(datas, nomes, números, consequências, curiosidades pouco conhecidas). Elas entram no MEIO da história, logo depois
+de "{(body[-1].get('text') or '')[-120:] if body else ''}" e antes do fechamento — então NÃO concluam, não façam reflexão
+final, não retomem o gancho e não tenham CTA. Não repita o que já foi dito. Cada cena nova com 15-25 palavras,
 no mesmo formato JSON das existentes (text, visual com kind "real" + query/query_pt em inglês/português, emphasis, label).
 {('Fatos de apoio: ' + facts_hint) if facts_hint else ''}
 
 ROTEIRO ATUAL (JSON): {json.dumps(scenes, ensure_ascii=False)}
 
-Responda JSON: {{"scenes": [roteiro COMPLETO com as cenas novas incluídas]}}"""
+Responda JSON: {{"scenes": [SOMENTE as cenas novas]}}"""
     data = llm.complete_json(prompt, temperature=0.6)
     new = data.get("scenes") if isinstance(data, dict) else (data if isinstance(data, list) else None)
     new = [x for x in (new or []) if isinstance(x, dict) and x.get("text")]
-    if not new or count_words(new) <= count_words(scenes):
-        raise ValueError(f"a IA devolveu {count_words(new)} palavras (antes {count_words(scenes)})")
-    return clean_ending(new, ch.cta)
+    known = {(x.get("text") or "").strip() for x in scenes}
+    new = [x for x in new if (x.get("text") or "").strip() not in known]  # se a IA devolveu o roteiro inteiro
+    if not new:
+        raise ValueError("a IA não devolveu cenas novas")
+    return clean_ending(body + new + closing, ch.cta)
 
 
 def ensure_length(ch: Channel, title: str, scenes: list[dict[str, Any]], fmt: str, log=lambda m: None,
@@ -586,7 +603,7 @@ def ensure_length(ch: Channel, title: str, scenes: list[dict[str, Any]], fmt: st
     target = target_words(ch, fmt, seconds)
     for _ in range(rounds):
         have = count_words(scenes)
-        if have >= target * 0.95:
+        if have >= target * (0.88 if fmt == "short" else 0.95):  # Short: não enche de cena por poucas palavras
             break
         log(f"Roteiro curto ({have} de ~{target} palavras) — acrescentando cenas")
         try:

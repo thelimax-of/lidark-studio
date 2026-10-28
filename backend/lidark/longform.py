@@ -235,7 +235,7 @@ def shorts_from_long(video_id: int, ctx: JobContext | None = None, count: int = 
         ch = s.get(Channel, v.channel_id)
         pub = s.exec(select(Publication).where(Publication.video_id == video_id, Publication.status == "published")).first()
     body = "\n".join(f"[{i}] {x.get('text', '')}" for i, x in enumerate(sc.scenes))
-    words = content.target_words(ch, "short")
+    words = content.target_words(ch, "short")  # Short enxuto (~45s, ou a duração fixada no canal)
     data = llm.complete_json(f"""{channel_brief(ch)}
 
 VÍDEO LONGO: "{sc.title}"
@@ -244,7 +244,7 @@ ROTEIRO (cenas numeradas):
 
 Escolha os {count} momentos MAIS fortes e autossuficientes deste vídeo (cada um entendível sozinho) e escreva um
 SHORT vertical NOVO para cada (não copie frases; reescreva para o formato curto):
-- {words} a {words + 25} palavras de narração (≥ 61 segundos), 9 a 12 cenas, gancho forte na 1ª frase.
+- {words - 10} a {words + 10} palavras de narração (Short enxuto, sem enrolação), 7 a 10 cenas, gancho forte na 1ª frase.
 - Só fatos que estão no roteiro do longo. Anos e números em algarismos.
 - Termine convidando para o vídeo completo no canal (ex.: "a história completa está no vídeo longo do canal") e com um
   pedido curto para seguir — essa é a última frase.

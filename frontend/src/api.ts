@@ -41,6 +41,7 @@ export type Channel = {
   radar?: { keywords?: string[]; competitors?: string[]; competitor_names?: Record<string, string> }
   counts?: { ideas: number; scripts: number; videos: number; published: number }
   footage?: boolean; image_credit_ok?: boolean; yt_category?: string; thumbs_blocked?: boolean
+  schedule?: { mode?: 'manual' | 'auto'; per_day?: number; min_gap_hours?: number; new_channel_cap?: number; new_channel_days?: number }
 }
 
 export type Idea = {

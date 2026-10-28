@@ -178,6 +178,8 @@ class LivreTemplate(OuroTemplate):
         x1, y1, x2, y2 = self.card
         acx, acy = (x1 + x2) / 2, (y1 + y2) / 2
 
+        if lay == "intro" and self.vertical:  # Shorts: manchete do gancho legível já no quadro 0
+            return self._intro_short(sc, t, local, p)
         if sc.image is None and lay != "graphic":
             lay = "graphic_bg"
         if lay == "graphic_bg":
@@ -243,6 +245,106 @@ class LivreTemplate(OuroTemplate):
             s = 0.8 + 0.2 * ease_out_back(local / 0.45)
             img = scaled(img, s)
             paste(out, img, (acx - img.width / 2, acy - img.height / 2 + 10 * k * math.sin(t * 1.5)))
+        return out
+
+    def _intro_short(self, sc: SceneT, t: float, local: float, p: float) -> Image.Image:
+        """Abertura dos Shorts: 78% desliza no 1º segundo, então o quadro 0 já tem a manchete do gancho (grande,
+        alto contraste) sobre uma imagem que já está se mexendo. Cada estilo sorteado ('typed', 'words', 'band',
+        'punch') mantém a sua cara — muda o movimento da foto e o desenho da manchete, não só a cor."""
+        W, H, k = self.W, self.H, self.k
+        style = self.lk.get("intro", "typed")
+        edge = hex2rgb(self.th.get("bg_edge", "#061915"))
+        hi = rgba(self.th.get("caption_hi") or self.th.get("gold", "#e9b440"))
+        spoken = [w for w in sc.words if w.start <= t + 0.05]
+        photo = (sc.clip.frame(local) if sc.clip is not None else None) or sc.image
+        # movimento da foto desde o 1º quadro (cada estilo com o seu)
+        foc = (0.5, 0.36)
+        if style == "punch":  # tranco: começa bem perto e recua
+            z = 1.08 + 0.32 * (1 - ease_out_cubic(clamp(local / 0.6))) + 0.06 * p
+        elif style == "words":  # pulsa a cada palavra
+            age = t - spoken[-1].start if spoken else 0.0
+            z = 1.1 + 0.1 * p + 0.035 * (1 - clamp(age / 0.22))
+        elif style == "band":  # panorâmica lateral
+            z = 1.14 + 0.06 * p
+            foc = (0.38 + 0.24 * ease_out_cubic(clamp(local / 2.5)), 0.38)
+        else:  # typed: avanço rápido no começo, depois Ken Burns lento
+            z = 1.04 + 0.1 * ease_out_cubic(clamp(local / 1.2)) + 0.08 * p
+        if photo is not None:
+            out = fit_cover(photo, W, H, zoom=(1.0 if sc.clip is not None else z), focus=foc).convert("RGBA")
+            out.alpha_composite(Image.new("RGBA", (W, H), (*edge, 120 if style == "band" else 140)))
+        else:
+            out = self.bg.copy()
+            self.particles.draw(out, t)
+        out.alpha_composite(self.vignette)
+        if style == "punch":  # flash curto (fraco o bastante para o 1º quadro não ficar lavado)
+            fl = 1 - clamp(local / 0.25)
+            if fl > 0:
+                out.alpha_composite(Image.new("RGBA", (W, H), (255, 250, 235, int(85 * fl))))
+        d = ImageDraw.Draw(out)
+        maxw = int(W - 120 * k)
+        y_max = H * 0.6  # o texto da abertura nunca desce até a área do mascote
+        text = " ".join(w.text for w in spoken)
+
+        def lines_below(y: float, size: int, serif: bool, upper: bool, max_lines: int) -> None:
+            if not text:
+                return
+            f = font(self.F_SERIF, size, 900) if serif else font(self.F_XB, size, 900)
+            lh = size * 1.18
+            lines = wrap(f, text.upper() if upper else text, maxw)
+            n = max(1, min(max_lines, int((y_max - y) / lh)))
+            y += lh / 2
+            for ln in lines[-n:]:
+                if serif:
+                    d.text((W / 2 + 4 * k, y + 5 * k), ln, font=f, fill=(0, 0, 0, 160), anchor="mm")
+                    d.text((W / 2, y), ln, font=f, fill=(248, 236, 206, 255), anchor="mm")
+                else:
+                    d.text((W / 2, y), ln, font=f, fill=(250, 246, 236, 255), anchor="mm", stroke_width=int(6 * k),
+                           stroke_fill=(8, 8, 10, 255))
+                y += lh
+
+        if style == "words":  # manchete no alto + a palavra falada agora, enorme, no centro
+            hk = self._hook_img("stroke", maxw, int(76 * k))
+            paste(out, hk, (W / 2 - hk.width / 2, H * 0.2 - hk.height / 2))
+            wd = spoken[-1] if spoken else (sc.words[0] if sc.words else None)
+            if wd is not None:
+                age = max(0.0, t - wd.start)
+                size = int((150 if len(wd.text) < 9 else 112) * k)
+                f = font(self.F_XB, size, 900)
+                s_ = 0.7 + 0.3 * ease_out_back(clamp(age / 0.16), 2.0) if spoken else 1.0
+                img = Image.new("RGBA", (int(W * 0.96), int(size * 1.6)), (0, 0, 0, 0))
+                ImageDraw.Draw(img).text((img.width / 2, img.height / 2), wd.text.upper(), font=f,
+                                         fill=hi if wd.hi else (250, 246, 236, 255), anchor="mm",
+                                         stroke_width=int(8 * k), stroke_fill=(8, 8, 10, 255))
+                img = scaled(img, s_)
+                paste(out, img, (W / 2 - img.width / 2, H * 0.43 - img.height / 2))
+            return out
+        if style == "band":  # faixa de cinema já aberta no quadro 0, com a manchete dentro; fala logo abaixo
+            hk = self._hook_img("plain", maxw, int(84 * k))
+            cy = int(H * 0.27)
+            bh = int((hk.height + 70 * k) * (0.9 + 0.1 * ease_out_cubic(clamp(local / 0.3))))
+            out.alpha_composite(Image.new("RGBA", (W, bh), (8, 8, 10, 220)), (0, cy - bh // 2))
+            d.line((0, cy - bh // 2, W, cy - bh // 2), fill=hi, width=max(2, int(4 * k)))
+            d.line((0, cy + bh // 2, W, cy + bh // 2), fill=hi, width=max(2, int(4 * k)))
+            paste(out, hk, (W / 2 - hk.width / 2, cy - hk.height / 2))
+            lines_below(cy + bh / 2 + 44 * k, int((56 if len(sc.text) < 70 else 50) * k), False, True, 3)
+            return out
+        if style == "punch":  # manchete em destaque que bate na tela (escala) e assenta
+            hk = self._hook_img("gold", maxw, int(92 * k))
+            s_ = min(1 + 0.22 * (1 - ease_out_cubic(clamp(local / 0.35))), W * 0.98 / hk.width)
+            hk2 = scaled(hk, s_)
+            cy = H * 0.26
+            paste(out, hk2, (W / 2 - hk2.width / 2, cy - hk2.height / 2))
+            lines_below(cy + hk.height / 2 + 40 * k, int((60 if len(sc.text) < 60 else 52) * k), False, False, 3)
+            return out
+        # typed: manchete serifada + filete dourado; a frase falada vai sendo escrita embaixo
+        hk = self._hook_img("serif", maxw, int(96 * k))
+        hk2 = scaled(hk, 1 + 0.05 * (1 - ease_out_cubic(clamp(local / 0.4))))
+        cy = H * 0.25
+        paste(out, hk2, (W / 2 - hk2.width / 2, cy - hk2.height / 2))
+        yb = cy + hk.height / 2 + 18 * k
+        bw = W * 0.18 * (0.6 + 0.4 * ease_out_cubic(clamp(local / 0.5)))
+        d.rounded_rectangle((W / 2 - bw / 2, yb, W / 2 + bw / 2, yb + 7 * k), int(3 * k), fill=hi)
+        lines_below(yb + 34 * k, int((60 if len(sc.text) < 60 else 52) * k), True, False, 4)
         return out
 
     def _intro_alt(self, sc: SceneT, t: float, p: float, photo: Image.Image | None = None) -> Image.Image:
@@ -411,7 +513,7 @@ class LivreTemplate(OuroTemplate):
             tt = local if entry == "late" else t
             p = clamp(tt / 0.8)
             if entry == "drop":
-                y0 = -0.25 * H
+                y0 = ty - 0.12 * H if self.vertical else -0.25 * H  # nos Shorts não atravessa a manchete do gancho
                 y = y0 + (ty - y0) * ease_out_back(p, 1.2)
                 return tx, y, 1.0, 1.0, tx > W / 2
             if entry in ("rise", "late"):
@@ -523,10 +625,15 @@ class LivreTemplate(OuroTemplate):
             m, (dx, dy) = self.mascot.frame(t, mouth, talk, mood, mk, mirror)
             if abs(msx - 1) > 0.01 or abs(msy - 1) > 0.01:
                 m = m.resize((max(2, int(m.width * msx)), max(2, int(m.height * msy))), Image.BILINEAR)
-            # nunca sobe por cima da legenda: o topo (coroa/luvas) fica abaixo dela
-            if not in_outro and not is_intro and sc.index not in self.hidden:
+            # nunca sobe por cima da legenda: o topo (coroa/luvas) fica abaixo dela.
+            # Só quando está na mesma coluna da legenda — no horizontal ele fica ao lado e descer o jogava para fora do quadro
+            cap_cx = self.W / 2 if self.vertical else (self.card[0] + self.card[2]) / 2
+            same_col = abs(mx - cap_cx) < self.caption_maxw / 2 + self.base_R
+            if same_col and not in_outro and not is_intro and sc.index not in self.hidden:
                 min_y = self.caption_cy + 70 * k + self.base_R * 1.2 * msy
                 my = max(my, min_y - dy)
+            if is_intro and self.vertical and not in_outro:  # abertura dos Shorts: fica abaixo da manchete/fala
+                my = max(my, self.H * 0.6 + self.base_R * 1.2 * msy - dy)
             cxm = self.mascot.cx * msx
             out.alpha_composite(m, (int(mx - cxm + dx), int(my - self.mascot.cy * msy + dy)))
 

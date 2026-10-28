@@ -72,7 +72,7 @@ Responda JSON:
 {{"options": [{{"name": "...", "handle": "...", "tagline": "..."}}, {{...}}, {{...}}],
 "niche": "nicho em 1 frase", "audience": "...", "tone": "...", "description": "proposta em 1 frase",
 "image_style": "estilo das imagens em inglês", "music_mood": "trilha em inglês (2-4 palavras)",
-"voice_gender": "male|female", "voice_rate": "+0% a +12%", "short_seconds": 60-75,
+"voice_gender": "male|female", "voice_rate": "+0% a +12%",
 "mascot": "tipo", "mascot_color": "#hex", "mascot_accent": "#hex", "symbol": "...", "motif": "...",
 "font_title": "arquivo.ttf", "font_caption": "arquivo.ttf", "logo_text": "#hex",
 "palette": {{{', '.join(f'"{k}": "#hex"' for k in PALETTE_KEYS)}}},
@@ -263,7 +263,8 @@ def apply_draft(draft_id: int, channel_id: int) -> None:
         if isinstance(idn.get("voice_rate"), str) and re.fullmatch(r"[+-]\d{1,2}%", idn["voice_rate"]):
             ch.voice_rate = idn["voice_rate"]
         try:
-            ch.short_seconds = max(60, min(90, int(idn.get("short_seconds") or ch.short_seconds)))
+            if idn.get("short_seconds"):  # 0 = automático (o laboratório testa faixas de duração)
+                ch.short_seconds = max(20, min(170, int(idn["short_seconds"])))
         except (TypeError, ValueError):
             pass
         fm = [f for f in idn.get("formats") or [] if f in ("short", "long")]

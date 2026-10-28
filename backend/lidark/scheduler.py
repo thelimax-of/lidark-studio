@@ -78,8 +78,15 @@ def autopilot_tick() -> None:
     local_now = datetime.now()
     with session() as s:
         chans = s.exec(select(Channel).where(Channel.auto_pilot == True)).all()  # noqa: E712
+    from . import posting_times
     for ch in chans:
-        for slot in ch.posting_slots or []:
+        auto = posting_times.settings(ch)["mode"] == "auto"
+        try:
+            slots = posting_times.auto_slots(ch) if auto else (ch.posting_slots or [])
+        except Exception as e:  # noqa: BLE001
+            log.warning("horários automáticos falharam (%s): usando os fixos", e)
+            slots = ch.posting_slots or []
+        for slot in slots:
             parsed = parse_slot(slot)
             if not parsed:
                 continue
@@ -95,10 +102,18 @@ def autopilot_tick() -> None:
                 key = f"{ch.id}|{target:%Y-%m-%d %H:%M}|{fmt}"
                 if st.get(key):
                     continue
-                st[key] = True
-                enqueue("autopilot", title=f"Piloto automático: {ch.name} ({slot})", channel_id=ch.id,
-                        payload={"publish_at": (target + timedelta(minutes=random.randint(-12, 12))).astimezone().isoformat(),
-                                 "format": fmt})
+                publish_at = (target + timedelta(minutes=random.randint(-12, 12))).astimezone()
+                # sem rajadas: espaço mínimo entre posts e limite diário de canal novo
+                pending = [datetime.fromisoformat(v) for k, v in st.items()
+                           if k.startswith(f"{ch.id}|") and isinstance(v, str) and v[:1].isdigit()]
+                why = posting_times.conflict(ch, publish_at, fmt, extra=pending)
+                if why:
+                    st[key] = "skip"
+                    log.info("piloto automático pulou %s: %s", key, why)
+                    continue
+                st[key] = publish_at.isoformat()
+                enqueue("autopilot", title=f"Piloto automático: {ch.name} ({slot}{' · auto' if auto else ''})", channel_id=ch.id,
+                        payload={"publish_at": publish_at.isoformat(), "format": fmt})
                 log.info("piloto automático disparado: %s", key)
     cutoff = (local_now - timedelta(days=8)).strftime("%Y-%m-%d")
     _save({k: v for k, v in st.items() if k.split("|")[1][:10] >= cutoff})

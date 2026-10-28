@@ -44,7 +44,7 @@ def seed() -> None:
             description="Uma história do passado todo dia. Aqui o passado vale ouro.",
             editorial_guide=OURO_GUIDE,
             tone="intrigante, didático, revelador, frases curtas",
-            formats=["short", "long"], short_seconds=65, long_minutes=6,
+            formats=["short", "long"], short_seconds=0, long_minutes=6,
             voice_provider="edge", voice_name="pt-BR-AntonioNeural", voice_rate="+10%",
             visual_mode="mixed", template="livre", theme=OURO_THEME,
             default_hashtags=["#Shorts", "#HistóriaDoBrasil", "#ENEM", "#Curiosidades", "#História"],

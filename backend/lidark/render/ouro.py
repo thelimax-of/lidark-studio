@@ -306,6 +306,51 @@ class OuroTemplate:
         self._title_cache[key] = img
         return img
 
+    def _hook_line(self) -> str:
+        """Manchete curta do gancho: texto da miniatura → 1ª frase curta da abertura → título."""
+        import re
+        tl = self.tl
+        txt = (tl.hook or "").strip()
+        if not txt and tl.scenes:
+            first = re.split(r"(?<=[.!?])\s+", tl.scenes[0].text.strip())[0]
+            txt = first if len(first.split()) <= 9 else ""
+        if not txt:
+            txt = re.sub(r"#\w+", "", tl.title).strip()
+        ws = txt.split()
+        if len(ws) > 9:
+            txt = " ".join(ws[:8]).rstrip(",;:") + "…"
+        return txt
+
+    @lru_cache(maxsize=8)
+    def _hook_img(self, kind: str, max_w: int, size: int) -> Image.Image:
+        """Manchete do gancho em letra grande e alto contraste — nos Shorts já aparece no quadro 0 (antes do 1º deslize).
+        kind: 'serif' (creme com sombra) · 'stroke' (branca com contorno) · 'gold' (destaque com contorno) · 'plain' (destaque liso)."""
+        k = self.k
+        serif = kind == "serif"
+        text = self._hook_line() if serif else self._hook_line().upper()
+        fname, wgt = (self.F_SERIF, 900) if serif else (self.F_XB, 900)  # 900: fontes variáveis (ex.: Montserrat) abrem finas
+        while True:  # encolhe até caber em no máximo 3 linhas
+            f = font(fname, size, wgt)
+            lines = wrap(f, text, max_w)
+            if len(lines) <= 3 or size <= 44 * k:
+                break
+            size = int(size * 0.9)
+        stroke = 0 if kind == "plain" else max(2, int(size * (0.05 if serif else 0.085)))
+        lh = int(size * 1.12)
+        w = int(max(f.getlength(ln) for ln in lines) + 2 * stroke + 24 * k)
+        h = int(lh * len(lines) + 2 * stroke + 16 * k)
+        hi = rgba(self.th.get("caption_hi") or self.th.get("gold", "#e9b440"))
+        fill = {"serif": (248, 236, 206, 255), "stroke": (250, 246, 236, 255)}.get(kind, hi)
+
+        def draw(d: ImageDraw.ImageDraw, ss: float):
+            fs = font(fname, int(size * ss), wgt)
+            for i, ln in enumerate(lines):
+                x, y = w / 2 * ss, (stroke + 8 * k + lh * i + lh / 2) * ss
+                if serif:
+                    d.text((x + 5 * k * ss, y + 6 * k * ss), ln, font=fs, fill=(0, 0, 0, 190), anchor="mm")
+                d.text((x, y), ln, font=fs, fill=fill, anchor="mm", stroke_width=int(stroke * ss), stroke_fill=(8, 8, 10, 255))
+        return supersampled(w, h, draw, 2)
+
     @lru_cache(maxsize=16)
     def _header(self, step: int) -> Image.Image:
         k, W = self.k, self.W
@@ -531,9 +576,21 @@ class OuroTemplate:
                 paste(out, self._title_img(text, int(cw - 120 * k), size), (x1 + 60 * k, y1 + 50 * k))
             if sc.image is not None:
                 w, h = self._image_box(sc.image, True)
-                grow = 0.6 + 0.4 * ease_out_cubic(local / dur)
-                fi = fx._scale(self._framed_image(sc.index, w, h, 1 + 0.08 * local / dur), grow)
+                if self.vertical:  # Shorts: a foto já entra grande e se mexendo no quadro 0
+                    ar = clamp(sc.image.width / sc.image.height, 0.62, 1.9)
+                    w = int(min(cw * 0.74, ch * 0.56 * ar))
+                    h = int(w / ar)
+                    grow = 0.82 + 0.18 * ease_out_cubic(local / min(dur, 1.5))
+                    z = 1.18 - 0.1 * ease_out_cubic(local / 1.2) + 0.06 * local / dur
+                else:
+                    grow, z = 0.6 + 0.4 * ease_out_cubic(local / dur), 1 + 0.08 * local / dur
+                fi = fx._scale(self._framed_image(sc.index, w, h, z), grow)
                 self._place(out, fi, x1 + cw / 2, y1 + ch * 0.66, 1)
+            if self.vertical:  # manchete do gancho entre o cartão e o mascote, legível desde o 1º quadro
+                hk = self._hook_img("gold", int(self.caption_maxw), int(80 * k))
+                hk = scaled(hk, 1 + 0.08 * (1 - ease_out_cubic(local / 0.3)))
+                top_m = self.mascot_c[1] - self.mascot_R * 1.3
+                self._place(out, hk, self.W / 2, (y2 + top_m) / 2, 1)
             return
 
         ccx, ccy = cw / 2, ch / 2 + 18 * k

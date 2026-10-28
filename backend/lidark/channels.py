@@ -179,7 +179,7 @@ def import_videos(channel_id: int, ctx: JobContext | None = None, limit: int = 4
                 # mantém os dados de Analytics (retenção, tempo assistido) da leitura anterior
                 prev = s.exec(select(MetricSnapshot).where(MetricSnapshot.publication_id == pub.id)
                               .order_by(MetricSnapshot.captured_at.desc())).first()
-                keep = {k: getattr(prev, k) for k in ("shares", "saves", "subscribers_gained", "watch_time_minutes",
+                keep = {k: getattr(prev, k) for k in ("engaged_views", "shares", "saves", "subscribers_gained", "watch_time_minutes",
                                                       "avg_view_duration", "avg_view_percentage")} if prev else {}
                 s.add(MetricSnapshot(publication_id=pub.id, channel_id=channel_id, platform="youtube",
                                      views=int(st.get("viewCount", 0)), likes=int(st.get("likeCount", 0)),
@@ -253,7 +253,7 @@ Responda JSON:
 "palette": {{{', '.join(f'"{k}": "#hex"' for k in PALETTE_KEYS)}}},
 "stamp_myth": "#hex", "stamp_truth": "#hex",
 "template": "livre ou ouro", "visual_mode": "real | mixed | ai",
-"voice_gender": "male | female", "voice_rate": "+0% a +15%", "short_seconds": 60-75,
+"voice_gender": "male | female", "voice_rate": "+0% a +15%",
 "format_tip": "formato de vídeo que mais funciona nesse nicho"}}"""
     data = llm.complete_json(prompt, temperature=0.7)
     if not isinstance(data, dict):
@@ -321,7 +321,8 @@ def _apply_identity(channel_id: int, d: dict[str, Any], parts: str) -> None:
             if isinstance(d.get("voice_rate"), str) and re.fullmatch(r"[+-]\d{1,2}%", d["voice_rate"]):
                 ch.voice_rate = d["voice_rate"]
             try:
-                ch.short_seconds = max(60, min(90, int(d.get("short_seconds", ch.short_seconds))))
+                if d.get("short_seconds"):  # 0 = automático (o laboratório testa faixas de duração)
+                    ch.short_seconds = max(20, min(170, int(d["short_seconds"])))
             except (TypeError, ValueError):
                 pass
         if parts in ("all", "visual"):

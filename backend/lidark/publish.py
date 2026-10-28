@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -243,18 +243,42 @@ def yt_metrics(acc: Account, pubs: list[Publication]) -> dict[str, dict[str, Any
     try:
         ya = _yt_client(creds, "youtubeAnalytics", "v2")
         wanted = set(ids)
+        # engagedViews = views que contam p/ monetizar Shorts (desde 31/03/2025 "views" conta todo início/replay)
         rep = ya.reports().query(
             ids="channel==MINE", startDate="2015-01-01", endDate=datetime.now(timezone.utc).date().isoformat(),
-            metrics="views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,subscribersGained,shares",
+            metrics="views,engagedViews,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,subscribersGained,shares",
             dimensions="video", sort="-views", maxResults=200).execute()
         for row in rep.get("rows", []) or []:
-            vid, _v, mins, avd, avp, subs, shares = row
+            vid, _v, engaged, mins, avd, avp, subs, shares = row
             if vid in wanted:
-                out.setdefault(vid, {}).update({"watch_time_minutes": mins, "avg_view_duration": avd,
-                                                "avg_view_percentage": avp, "subscribers_gained": subs, "shares": shares})
+                out.setdefault(vid, {}).update({"engaged_views": int(engaged or 0), "watch_time_minutes": mins,
+                                                "avg_view_duration": avd, "avg_view_percentage": avp,
+                                                "subscribers_gained": subs, "shares": shares})
     except Exception as e:  # noqa: BLE001
         log.warning("YouTube Analytics: %s", e)
     return out
+
+
+# origens de tráfego agrupadas como importam p/ a monetização: só o feed do Shorts divide receita de anúncios,
+# e views vindas de anúncio pago (ADVERTISING) não são "qualificadas" (Central de Ajuda do YouTube)
+TRAFFIC_GROUPS = {"SHORTS": "shorts_feed", "YT_SEARCH": "search", "ADVERTISING": "ads"}
+
+
+def yt_traffic(acc: Account, days: int = 90) -> dict[str, Any]:
+    """Views × views engajadas por origem de tráfego (feed do Shorts / busca / anúncios / outras) no canal."""
+    ya = _yt_client(_yt_creds(acc), "youtubeAnalytics", "v2")
+    end = datetime.now(timezone.utc).date()
+    rep = ya.reports().query(ids="channel==MINE", startDate=(end - timedelta(days=days)).isoformat(), endDate=end.isoformat(),
+                             metrics="views,engagedViews", dimensions="creatorContentType,insightTrafficSourceType").execute()
+    groups: dict[str, dict[str, int]] = {}
+    for ctype, src, v, e in rep.get("rows", []) or []:
+        key = ("short_" if "short" in str(ctype).lower() else "long_") + TRAFFIC_GROUPS.get(src, "other")
+        g = groups.setdefault(key, {"views": 0, "engaged_views": 0})
+        g["views"] += int(v or 0)
+        g["engaged_views"] += int(e or 0)
+    return {"days": days, "updated_at": datetime.now(timezone.utc).isoformat(), "groups": groups,
+            "sources": [{"type": str(c).lower(), "source": src, "views": int(v or 0), "engaged_views": int(e or 0)}
+                        for c, src, v, e in rep.get("rows", []) or []]}
 
 
 # ================================================================ textos
@@ -395,6 +419,17 @@ def job_collect_metrics(ctx: JobContext) -> dict:
         except Exception as e:  # noqa: BLE001
             ctx.log(f"{acc.platform}: {e}")
             continue
+        if acc.platform == "youtube":  # origens de tráfego do canal (views × engajadas; anúncios não contam p/ YPP)
+            try:
+                traffic = yt_traffic(acc)
+                with session() as s:
+                    c = s.get(Channel, acc.channel_id)
+                    if c:
+                        c.stats = {**(c.stats or {}), "traffic": traffic}
+                        s.add(c)
+                        s.commit()
+            except Exception as e:  # noqa: BLE001
+                ctx.log(f"Origens de tráfego: {e}")
         if acc.platform == "youtube":  # curva de retenção segundo a segundo
             from .retention import collect_curves
             for vid_id, curve in collect_curves(acc, pubs).items():

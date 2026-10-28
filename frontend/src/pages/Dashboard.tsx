@@ -3,7 +3,8 @@ import { AlertTriangle, CalendarClock, Play, ShieldCheck, Send, ArrowUpRight, Cl
 import { api, invalidate, mediaUrl, useApi, type Idea, type Job, type Video } from '../api'
 import VarietyCard from './VarietyCard'
 import { YppCard } from './Growth'
-import { act, ago, fmtNum, PageHeader, Progress, ScoreRing, SectionTitle, Skeleton, Sparkline, Status, useChannel } from '../ui'
+import AllChannels from './Overview'
+import { act, ago, ChannelScope, fmtNum, PageHeader, Progress, ScoreRing, SectionTitle, Skeleton, Sparkline, Status, useChannel, useScope } from '../ui'
 
 type Daily = { rows: { day: string; views: number; minutes: number; subs: number; likes: number }[] }
 
@@ -11,9 +12,10 @@ const More = ({ to, children }: { to: string; children: string }) =>
   <Link to={to} className="text-[12.5px] text-muted hover:text-text inline-flex items-center gap-0.5">{children}<ArrowUpRight size={13} /></Link>
 
 export default function Dashboard() {
-  const { channel } = useChannel()
+  const { channel, setChannelId } = useChannel()
   const nav = useNavigate()
-  const cid = channel?.id
+  const [all, setAll] = useScope('dashboard', true)
+  const cid = all ? undefined : channel?.id
   const { data: dash } = useApi<any>(cid ? `/dashboard?channel_id=${cid}` : null)
   const { data: health } = useApi<any>('/health')
   const { data: daily } = useApi<Daily>(cid ? `/channels/${cid}/analytics?days=28` : null)
@@ -24,6 +26,8 @@ export default function Dashboard() {
   const { data: insights = [] } = useApi<{ text: string; kind?: string }[]>(cid ? `/channels/${cid}/insights` : null)
 
   if (!channel) return <div className="space-y-4"><Skeleton className="h-24" /><Skeleton className="h-32" /></div>
+  const scope = <ChannelScope all={all} onChange={setAll} />
+  if (all) return <AllChannels scope={scope} onOpen={id => { setChannelId(id); setAll(false) }} />
   const c = dash?.counts ?? {}
   const rows = daily?.rows ?? []
   const sum = (k: 'views' | 'minutes' | 'subs' | 'likes') => rows.reduce((n, r) => n + (r[k] ?? 0), 0)
@@ -39,7 +43,7 @@ export default function Dashboard() {
       <PageHeader title="Visão geral" subtitle={<>
         <span className="num">{fmtNum(channel.stats?.subscribers ?? 0)}</span> inscritos · <span className="num">{fmtNum(channel.stats?.views ?? 0)}</span> views no total · <span className="num">{channel.stats?.videos ?? c.published ?? 0}</span> vídeos
         {channel.auto_pilot && <> · <span className="inline-flex items-center gap-1.5 text-ok"><span className="dot" />Piloto automático ligado</span></>}
-      </>} />
+      </>} actions={scope} />
 
       {noLLM && (
         <Link to="/config" className="card px-4 py-3 flex items-center gap-3 border-warn/40! hover:bg-warn/5">

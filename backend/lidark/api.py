@@ -137,6 +137,14 @@ def update_channel(cid: int, data: dict[str, Any], s: Session = Depends(get_sess
     return ch
 
 
+@router.get("/channels/{cid}/posting-times")
+def channel_posting_times(cid: int, s: Session = Depends(get_session)):
+    """Melhores horários de postagem (Brasília) pelos dados do canal + o porquê."""
+    from . import posting_times
+    _get(s, Channel, cid)
+    return posting_times.suggest(cid)
+
+
 @router.delete("/channels/{cid}")
 def delete_channel(cid: int, s: Session = Depends(get_session)):
     ch = _get(s, Channel, cid)
@@ -489,6 +497,9 @@ def jobs_capacity(s: Session = Depends(get_session)):
         slots = [str(x) for x in ch.posting_slots or []]
         longs_week = sum("longo" in x.lower() for x in slots)
         shorts_day = (len(slots) - longs_week) if "short" in (ch.formats or []) else 0
+        if (ch.schedule or {}).get("mode") == "auto" and "short" in (ch.formats or []):
+            from .posting_times import settings as _sched_cfg
+            shorts_day = _sched_cfg(ch)["per_day"]  # horários pelos dados: N Shorts/dia
         if "long" in (ch.formats or []) and not longs_week:
             longs_week = 1
         if "long" not in (ch.formats or []):
@@ -669,6 +680,19 @@ def channel_analytics(cid: int, days: int = 28):
         return {"rows": [], "connected": True, "error": str(e)[:300]}
 
 
+@router.get("/overview")
+def overview_api(days: int = 28, channel_id: Optional[int] = None):
+    """Todos os canais juntos: totais do período, comparação por canal e views diárias por canal."""
+    from .analytics import overview
+    return overview(max(1, min(days, 365)), channel_id)
+
+
+@router.get("/performance")
+def performance_api(channel_id: Optional[int] = None):
+    from .analytics import performance_all, performance_table
+    return performance_table(channel_id) if channel_id else performance_all()
+
+
 @router.get("/channels/{cid}/retention")
 def channel_retention_api(cid: int):
     from .retention import channel_retention
@@ -679,6 +703,13 @@ def channel_retention_api(cid: int):
 def channel_retention_insights(cid: int):
     from .retention import generate_retention_insights
     return {"lessons": generate_retention_insights(cid)}
+
+
+@router.get("/channels/{cid}/retention/rules")
+def channel_retention_rules(cid: int):
+    """Regras automáticas (calculadas das quedas por cena) que entram no prompt do roteirista."""
+    from .retention import retention_rules
+    return retention_rules(cid)
 
 
 @router.get("/channels/{cid}/insights")
@@ -756,15 +787,21 @@ def channel_campaigns_save(cid: int, body: CampaignsIn, s: Session = Depends(get
 
 
 @router.get("/comments")
-def list_comments(channel_id: int, status: str = "new", s: Session = Depends(get_session)):
+def list_comments(channel_id: Optional[int] = None, status: str = "new", s: Session = Depends(get_session)):
+    """Sem channel_id: caixa única com os comentários de todos os canais."""
     from .community import _account, can_write
     from .models import Comment
-    rows = s.exec(select(Comment).where(Comment.channel_id == channel_id, Comment.status == status)
-                  .order_by(Comment.published_at.desc()).limit(100)).all()
-    counts = {st: s.exec(select(func.count()).select_from(Comment).where(Comment.channel_id == channel_id,
-                                                                          Comment.status == st)).one()
+
+    def where(q):
+        return q.where(Comment.channel_id == channel_id) if channel_id else q
+    rows = s.exec(where(select(Comment).where(Comment.status == status))
+                  .order_by(Comment.published_at.desc()).limit(200 if not channel_id else 100)).all()
+    counts = {st: s.exec(where(select(func.count()).select_from(Comment).where(Comment.status == st))).one()
               for st in ("new", "replied", "ignored")}
-    return {"items": rows, "counts": counts, "can_write": can_write(_account(channel_id))}
+    ids = [channel_id] if channel_id else [c.id for c in s.exec(select(Channel)).all()]
+    by_channel = {i: can_write(_account(i)) for i in ids}
+    return {"items": rows, "counts": counts, "can_write": all(by_channel.values()) if by_channel else False,
+            "can_write_by": by_channel}
 
 
 class ReplyIn(BaseModel):
@@ -798,6 +835,11 @@ def comment_ignore(cid: int, s: Session = Depends(get_session)):
 @router.post("/channels/{cid}/comments/refresh")
 def comments_refresh(cid: int):
     return {"job_id": jobs.enqueue("fetch_comments", title="Buscar comentários novos", channel_id=cid).id}
+
+
+@router.post("/comments/refresh")
+def comments_refresh_all():
+    return {"job_id": jobs.enqueue("fetch_comments", title="Buscar comentários novos (todos os canais)").id}
 
 
 @router.get("/channels/{cid}/variety")

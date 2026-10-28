@@ -33,6 +33,40 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
 }
 export const useChannel = () => useContext(Ctx)
 
+// ---------------------------------------------------------------- filtro "Todos os canais" (local de cada página)
+
+/** Cores fixas por canal para gráficos (as cores de marca dos canais são parecidas demais entre si). */
+const SERIES = ['#d9a53a', '#5b9bf5', '#4cc38a', '#c084fc', '#f2727f', '#38bdf8', '#a3e635', '#fb923c']
+export const seriesColor = (channels: Channel[], id: number) => SERIES[Math.max(0, channels.findIndex(c => c.id === id)) % SERIES.length]
+
+/** Lembra, por página, se o filtro está em "Todos os canais" ou no canal selecionado. */
+export function useScope(page: string, initialAll: boolean): [boolean, (all: boolean) => void] {
+  const key = 'scope:' + page
+  const [all, setAll] = useState<boolean>(() => {
+    try { const v = localStorage.getItem(key); return v === null ? initialAll : v === 'all' } catch { return initialAll }
+  })
+  const set = (v: boolean) => { setAll(v); try { localStorage.setItem(key, v ? 'all' : 'one') } catch { /* noop */ } }
+  return [all, set]
+}
+
+/** Seletor "Todos os canais" + canais. Escolher um canal também troca o canal selecionado no menu lateral. */
+export function ChannelScope({ all, onChange }: { all: boolean; onChange: (all: boolean) => void }) {
+  const { channels, channel, setChannelId } = useChannel()
+  return (
+    <select className="input !w-auto !py-1.5 text-sm" value={all ? 'all' : String(channel?.id ?? '')}
+      onChange={e => { if (e.target.value === 'all') onChange(true); else { setChannelId(Number(e.target.value)); onChange(false) } }}>
+      <option value="all">Todos os canais</option>
+      {channels.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+    </select>
+  )
+}
+
+export function ChannelTag({ id }: { id: number }) {
+  const { channels } = useChannel()
+  const ch = channels.find(c => c.id === id)
+  return <span className="badge whitespace-nowrap"><span className="w-1.5 h-1.5 rounded-full" style={{ background: seriesColor(channels, id) }} />{ch?.name ?? `Canal ${id}`}</span>
+}
+
 // ---------------------------------------------------------------- toasts
 
 type Toast = { id: number; kind: 'ok' | 'err' | 'info'; text: string }

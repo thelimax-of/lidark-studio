@@ -108,7 +108,8 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
         return v, audio_duration(v["path"])
 
     base_rate = plan.get("voice_rate") or ch.voice_rate
-    min_total = max(61.0, float(plan.get("seconds") or ch.short_seconds or 60) - 2) if vertical else float(ch.long_minutes or 6) * 60 * 0.9
+    # Short: segue a duração sorteada no plano (sem piso de 60s — Shorts não têm duração mínima para monetizar)
+    min_total = max(20.0, float(plan.get("seconds") or ch.short_seconds or 45) - 4) if vertical else float(ch.long_minutes or 6) * 60 * 0.9
     cached = ck.get("voice") if ck.get("voice_sig") == content.scenes_sig(scenes) else None
     if cached and Path(cached["path"]).exists():
         voice, narr_dur = cached, float(ck["narr_dur"])
@@ -202,6 +203,7 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
         return bool((r.get("clip") and Path(r["clip"]).exists()) or (r.get("path") and Path(r["path"]).exists()))
 
     def pick(i_s):
+        ctx.check()  # cancelada: cenas que ainda estavam na fila nem começam
         i, s = i_s
         prev = (ck.get("picks") or {}).get(str(i))
         if prev and prev.get("key") == _scene_key(s) and _usable(prev.get("pick")):
@@ -289,8 +291,11 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
                 stats["hd"] += 1
         return r
 
-    with ThreadPoolExecutor(3) as ex:
+    ex = ThreadPoolExecutor(3)
+    try:
         picks = list(ex.map(pick, enumerate(scenes)))
+    finally:  # erro/cancelamento: não espera as outras cenas terminarem
+        ex.shutdown(wait=False, cancel_futures=True)
     for i, p in enumerate(picks):
         if p and p.get("fallback") and p.get("visual"):
             scenes[i] = {**scenes[i], "visual": p["visual"]}
@@ -342,12 +347,15 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
         st.end = float(scene_ts[i + 1].start if i + 1 < n else narration_end)
     # a tela final pode completar no máximo 3s (nunca fica repetindo o encerramento)
     duration = narration_end + OUTRO_SECONDS + min(3.0, max(0.0, min_total - narration_end - OUTRO_SECONDS))
-    if vertical and duration < 60:
-        ctx.log(f"⚠ Vídeo com {duration:.0f}s (abaixo de 60s) — roteiro ficou curto mesmo após expansão")
+    if vertical and duration < min_total - 6:
+        ctx.log(f"⚠ Vídeo com {duration:.0f}s (planejado ≈{min_total + 4:.0f}s) — roteiro ficou curto mesmo após expansão")
+    if vertical and duration > 180:
+        ctx.log(f"⚠ Vídeo com {duration:.0f}s — passa de 3 min e não conta como Short")
 
     # 5) direção de animação + envelope da voz (boca do mascote) ----------------------------
     env = _envelope(voice["path"], duration)
-    tl = Timeline(W, H, FPS, duration, narration_end, sc.title, scene_ts, steps, words, env, {**(ch.theme or {}), "_look": plan.get("look") or {}}, sc.format)
+    tl = Timeline(W, H, FPS, duration, narration_end, sc.title, scene_ts, steps, words, env, {**(ch.theme or {}), "_look": plan.get("look") or {}}, sc.format,
+                  hook=(sc.thumbnail_text or "").strip())
     template = _template(tpl, tl)
     impacts = list(getattr(template, "impacts", []))
     if hasattr(template, "_setup_direction"):

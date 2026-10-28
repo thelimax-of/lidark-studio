@@ -52,6 +52,8 @@ def performance_table(channel_id: int) -> list[dict[str, Any]]:
                     row["retention"].append(m.avg_view_percentage)
                 row["watch"] = row.get("watch", 0.0) + (m.watch_time_minutes or 0)
                 row["avd"] = max(row.get("avd", 0.0), m.avg_view_duration or 0)
+                if "engaged_views" in (m.raw or {}):  # só leituras do Analytics trazem views engajadas
+                    row["engaged"] = row.get("engaged", 0) + (m.engaged_views or 0)
         rows = []
         for vid, r in by_video.items():
             v = s.get(Video, vid) if isinstance(vid, int) else None
@@ -63,6 +65,9 @@ def performance_table(channel_id: int) -> list[dict[str, Any]]:
                 "retention": sum(r["retention"]) / len(r["retention"]) if r["retention"] else 0.0,
                 "predicted": idea.score if idea else None, "platforms": r["platforms"],
                 "watch_minutes": r.get("watch", 0.0), "avg_duration": r.get("avd", 0.0), **extra.get(vid, {}),
+                # views engajadas = as que contam p/ monetizar Shorts (ausente se ainda não houve leitura do Analytics)
+                **({"engaged_views": r["engaged"],
+                    "engaged_rate": round(100 * r["engaged"] / r["views"], 1) if r["views"] else None} if "engaged" in r else {}),
             })
     _rank(rows)
     return rows
@@ -152,3 +157,84 @@ def daily_analytics(channel_id: int, days: int = 28) -> dict[str, Any]:
                            dimensions="day", sort="day").execute()
     rows = [{"day": d, "views": v, "minutes": m, "subs": sg, "likes": lk, "shares": sh} for d, v, m, sg, lk, sh in r.get("rows", []) or []]
     return {"rows": rows, "connected": True}
+
+
+# ================================================================ todos os canais
+
+def _channels() -> list:
+    from .models import Channel
+    with session() as s:
+        return s.exec(select(Channel).order_by(Channel.id)).all()
+
+
+def performance_all() -> list[dict[str, Any]]:
+    """Tabela de desempenho de todos os canais juntos (a nota de desempenho continua relativa a cada canal)."""
+    out: list[dict[str, Any]] = []
+    for ch in _channels():
+        for r in performance_table(ch.id):
+            out.append({**r, "channel_id": ch.id, "channel_name": ch.name})
+    return out
+
+
+def _channel_summary(ch, days: int) -> dict[str, Any]:
+    """Resumo de um canal para a visão geral: período (YouTube Analytics) + vídeos (última leitura de métricas)."""
+    from datetime import timedelta
+    from .models import now
+    rows = performance_table(ch.id)
+    seen = [r for r in rows if r["views"]]
+    views_all = sum(r["views"] for r in rows)
+    inter = sum(r["likes"] + r["comments"] + r["shares"] for r in rows)
+    ret = [r["retention"] for r in rows if r["retention"] > 0]
+    since = now() - timedelta(days=days)
+    with session() as s:
+        pubs = s.exec(select(Publication).where(Publication.channel_id == ch.id, Publication.status == "published")).all()
+    recent = [p for p in pubs if p.published_at and p.published_at.replace(tzinfo=since.tzinfo) >= since]
+    out: dict[str, Any] = {
+        "id": ch.id, "name": ch.name, "avatar_url": ch.avatar_url, "color": (ch.theme or {}).get("gold") or ch.color,
+        "subscribers": (ch.stats or {}).get("subscribers", 0), "total_views": (ch.stats or {}).get("views", 0),
+        "videos": len(rows), "published_period": len(recent),
+        "views_per_video": round(views_all / len(seen)) if seen else 0,
+        "avg_retention": round(sum(ret) / len(ret), 1) if ret else 0.0,
+        "engagement_rate": round(100 * inter / views_all, 2) if views_all else 0.0,
+        "likes_total": sum(r["likes"] for r in rows), "comments_total": sum(r["comments"] for r in rows),
+        "connected": False, "error": "", "daily": [],
+    }
+    if any("engaged_views" in r for r in rows):
+        out["engaged_views_total"] = sum(r.get("engaged_views") or 0 for r in rows)
+    try:
+        d = daily_analytics(ch.id, days)
+        out["connected"], out["daily"] = d.get("connected", False), d.get("rows", [])
+    except Exception as e:  # noqa: BLE001 — um canal com erro não derruba os outros
+        log.warning("analytics de %s: %s", ch.name, e)
+        out["connected"], out["error"] = True, str(e)[:300]
+    period = {k: sum(r.get(k) or 0 for r in out["daily"]) for k in ("views", "minutes", "subs", "likes", "shares")}
+    if any("engaged_views" in r for r in out["daily"]):
+        period["engaged_views"] = sum(r.get("engaged_views") or 0 for r in out["daily"])
+    out["period"] = period
+    return out
+
+
+def overview(days: int = 28, channel_id: int | None = None) -> dict[str, Any]:
+    """Visão de todos os canais (ou de um): totais do período, comparação por canal e views diárias por canal."""
+    from concurrent.futures import ThreadPoolExecutor
+    chans = [c for c in _channels() if not channel_id or c.id == channel_id]
+    with ThreadPoolExecutor(max_workers=4) as ex:  # o YouTube Analytics é consultado canal a canal
+        summaries = list(ex.map(lambda c: _channel_summary(c, days), chans))
+    by_day: dict[str, dict[str, Any]] = {}
+    for sm in summaries:
+        for r in sm.pop("daily"):
+            d = by_day.setdefault(r["day"], {"day": r["day"], "views": 0, "minutes": 0, "subs": 0, "likes": 0, "shares": 0})
+            for k in ("views", "minutes", "subs", "likes", "shares", "engaged_views"):
+                if k in r:
+                    d[k] = d.get(k, 0) + (r[k] or 0)
+            d[f"c{sm['id']}"] = d.get(f"c{sm['id']}", 0) + (r.get("views") or 0)
+    keys = {k for sm in summaries for k in sm["period"]}
+    totals = {k: sum(sm["period"].get(k, 0) for sm in summaries) for k in keys}
+    totals.update({
+        "subscribers": sum(sm["subscribers"] or 0 for sm in summaries),
+        "total_views": sum(sm["total_views"] or 0 for sm in summaries),
+        "published_period": sum(sm["published_period"] for sm in summaries),
+        "comments_total": sum(sm["comments_total"] for sm in summaries),
+    })
+    return {"days": days, "channels": summaries, "daily": [by_day[k] for k in sorted(by_day)], "totals": totals,
+            "errors": [{"channel_id": sm["id"], "name": sm["name"], "error": sm["error"]} for sm in summaries if sm["error"]]}

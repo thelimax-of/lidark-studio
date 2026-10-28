@@ -93,7 +93,7 @@ export default function ChannelDetail() {
                 <Toggle key={k} on={f.formats.includes(k)} label={l} onClick={() => set({ formats: f.formats.includes(k) ? f.formats.filter(x => x !== k) : [...f.formats, k] })} />
               ))}
               <span className="text-sm text-muted self-center ml-2">Short com</span>
-              {[60, 65, 75].map(s => <Toggle key={s} on={f.short_seconds === s} label={`${s}s`} onClick={() => set({ short_seconds: s })} />)}
+              {[0, 35, 45, 60].map(s => <Toggle key={s} on={(f.short_seconds || 0) === s} label={s ? `${s}s` : 'Automático (testa faixas)'} onClick={() => set({ short_seconds: s })} />)}
               <span className="text-sm text-muted self-center ml-2">Longo com</span>
               {[5, 8, 12].map(m => <Toggle key={m} on={f.long_minutes === m} label={`${m} min`} onClick={() => set({ long_minutes: m })} />)}
             </div>
@@ -180,8 +180,7 @@ export default function ChannelDetail() {
               <input type="range" min={50} max={95} step={5} value={f.min_score_to_produce} onChange={e => set({ min_score_to_produce: Number(e.target.value) })} />
               <span className="font-semibold w-8">{f.min_score_to_produce}</span>
             </div>
-            <Label>Horários de postagem</Label>
-            <TimeChips slots={f.posting_slots} onChange={v => set({ posting_slots: v })} />
+            <ScheduleBox f={f} set={set} />
           </Section>
 
           <details className="card group">
@@ -391,6 +390,70 @@ function slotLabel(s: string) {
   const day = DAYS.find(([k]) => k && p.includes(k))?.[1] ?? 'Todo dia'
   const time = p.find(x => x.includes(':')) ?? s
   return `${day} ${time} · ${p.some(x => x.startsWith('long')) ? 'Longo' : 'Short'}`
+}
+
+type Suggestion = {
+  slots: string[]; per_day: number; young: boolean; age_days: number; samples: number; uses_data: boolean; basis: string[]
+  settings: { per_day: number; min_gap_hours: number; new_channel_cap: number; new_channel_days: number }
+  hours: { hour: number; score: number; data_weight: number }[]
+}
+
+/** Horários de postagem: fixos ou "Automático (pelos dados)", com espaço mínimo e limite de canal novo. */
+function ScheduleBox({ f, set }: { f: Ch; set: (p: Partial<Ch>) => void }) {
+  const { data: sug } = useApi<Suggestion>(`/channels/${f.id}/posting-times`)
+  const sc = f.schedule ?? {}
+  const cfg = { ...sug?.settings, ...sc }
+  const setSc = (p: NonNullable<Ch['schedule']>) => set({ schedule: { ...sc, ...p } })
+  const auto = sc.mode === 'auto'
+  const num = (label: string, v: number | undefined, on: (n: number) => void, min: number, max: number, step = 1, suf = '') => (
+    <label className="flex items-center gap-2 text-sm text-muted">{label}
+      <input type="number" className="input !w-20 !py-1" min={min} max={max} step={step} value={v ?? ''}
+        onChange={e => on(Number(e.target.value))} />{suf}</label>
+  )
+  const best = sug ? Math.max(...sug.hours.map(h => h.score)) : 1
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Label>Horários de postagem</Label>
+        <select className="input !w-auto !py-1 ml-auto" value={auto ? 'auto' : 'manual'} onChange={e => setSc({ mode: e.target.value as 'manual' | 'auto' })}>
+          <option value="manual">Horários fixos</option>
+          <option value="auto">Automático (pelos dados)</option>
+        </select>
+      </div>
+      {auto ? (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {(sug?.slots ?? []).map(s => <span key={s} className="chip !text-sm !py-1 text-ok border-ok/40">{s}</span>)}
+            {!sug && <Loader2 size={14} className="animate-spin text-muted" />}
+            <span className="ml-2">{num('Shorts por dia', cfg.per_day, n => setSc({ per_day: n }), 1, 8)}</span>
+          </div>
+          <div className="text-xs text-muted">Vídeos longos continuam nos horários fixos abaixo (os marcados como “longo”).</div>
+          <TimeChips slots={f.posting_slots.filter(s => s.includes('long'))} onChange={v => set({ posting_slots: [...f.posting_slots.filter(s => !s.includes('long')), ...v] })} />
+        </div>
+      ) : (
+        <TimeChips slots={f.posting_slots} onChange={v => set({ posting_slots: v })} />
+      )}
+      <div className="flex flex-wrap items-center gap-4">
+        {num('Espaço mínimo entre posts', cfg.min_gap_hours, n => setSc({ min_gap_hours: n }), 0, 12, 0.5, 'h')}
+        {num('Canal novo: até', cfg.new_channel_cap, n => setSc({ new_channel_cap: n }), 1, 10, 1, 'Shorts/dia')}
+        {num('nos primeiros', cfg.new_channel_days, n => setSc({ new_channel_days: n }), 0, 365, 1, 'dias')}
+      </div>
+      {sug && (
+        <div className="p-3 rounded-lg border border-line bg-panel2/40 text-sm space-y-2">
+          <div className="font-medium">Sugestão pelos dados: {sug.slots.join(' · ') || '—'}
+            <span className="text-muted font-normal"> · {sug.per_day}/dia{sug.young ? ` · canal novo (${Math.round(sug.age_days)} dia(s))` : ''}</span></div>
+          <div className="flex items-end gap-[2px] h-10" title="Força de cada hora (Brasília), 0 h → 23 h">
+            {sug.hours.map(h => (
+              <div key={h.hour} className={clsx('flex-1 rounded-sm', sug.slots.includes(`${String(h.hour).padStart(2, '0')}:00`) ? 'bg-ok' : 'bg-muted/30')}
+                style={{ height: `${Math.max(6, (h.score / best) * 100)}%` }} title={`${h.hour} h · força ${h.score} · dados ${Math.round(h.data_weight * 100)}%`} />
+            ))}
+          </div>
+          <div className="flex justify-between text-[10px] text-muted"><span>0 h</span><span>6 h</span><span>12 h</span><span>18 h</span><span>23 h</span></div>
+          <ul className="text-xs text-muted list-disc pl-4 space-y-0.5">{sug.basis.map(b => <li key={b}>{b}</li>)}</ul>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function TimeChips({ slots, onChange }: { slots: string[]; onChange: (v: string[]) => void }) {

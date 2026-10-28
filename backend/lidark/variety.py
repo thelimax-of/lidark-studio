@@ -240,6 +240,22 @@ def _opening(title: str) -> str:
 
 # ---------------------------------------------------------------- plano do vídeo
 
+# Duração do Short em faixas (segundos, inclusive). Não há duração mínima para monetizar Shorts: a receita vem das
+# views engajadas (quem não pula), então Shorts mais curtos tendem a reter melhor — o laboratório confirma por canal.
+DURATION_BANDS: dict[str, tuple[int, int]] = {"curto": (30, 38), "medio": (40, 48), "longo": (55, 65)}
+DURATION_PRIOR: dict[str, float] = {"curto": 80, "medio": 70, "longo": 30}  # antes de haver dados (50 = neutro)
+
+
+def duration_band(seconds: Any) -> str | None:
+    try:
+        s = float(seconds)
+    except (TypeError, ValueError):
+        return None
+    if s <= 0:
+        return None
+    return "curto" if s <= 38 else ("medio" if s <= 50 else "longo")
+
+
 _reserved: dict[int, list[tuple[float, dict[str, Any]]]] = defaultdict(list)
 _reserve_lock = threading.Lock()
 RESERVE_SECONDS = 45 * 60
@@ -277,8 +293,13 @@ def _plan(ch: Channel, fmt: str, pending: list[dict[str, Any]]) -> dict[str, Any
     dose = _pick([d[0] for d in GRAPHIC_DOSES], [h.get("graphics", "") for h in hist], 1, dw.get("graphics"), rng)
     out: dict[str, Any] = {"structure": structure, "hook_style": hook, "title_style": title, "cta_style": cta, "graphics": dose}
     if fmt == "short":
-        base = max(61, ch.short_seconds or 65)
-        out["seconds"] = base + rng.choice([0, 0, 3, 6, 9, 12])
+        if ch.short_seconds:  # duração fixada no canal: fica perto dela (Short nunca passa de 3 min)
+            out["seconds"] = max(15, min(175, ch.short_seconds + rng.choice([-3, -2, 0, 0, 2, 3])))
+        else:  # automático: a faixa de duração é um experimento, com prior favorecendo Shorts mais curtos
+            band = _pick(list(DURATION_BANDS), [h.get("duration") or duration_band(h.get("seconds")) or "" for h in hist],
+                         0, {**DURATION_PRIOR, **(dw.get("duration") or {})}, rng)
+            out["seconds"] = rng.randint(*DURATION_BANDS[band])
+        out["duration"] = duration_band(out["seconds"])
     try:  # variação leve de ritmo da voz (±3%), imperceptível como mudança de voz
         cur = int((ch.voice_rate or "+0%").strip().rstrip("%"))
         out["voice_rate"] = f"{cur + rng.choice([-3, -2, 0, 0, 2, 3]):+d}%"

@@ -43,7 +43,7 @@ class Channel(SQLModel, table=True):
     editorial_guide: str = TextField()
     tone: str = "envolvente, didático, curioso"
     formats: list = JsonField(["short"])  # short | long
-    short_seconds: int = 65
+    short_seconds: int = 0  # 0 = automático (testa faixas de duração); >0 fixa a duração do Short
     long_minutes: int = 6
     # Voz
     voice_provider: str = "edge"  # edge | gemini | kokoro
@@ -68,6 +68,8 @@ class Channel(SQLModel, table=True):
     auto_pilot: bool = False
     min_score_to_produce: int = 75
     posting_slots: list = JsonField(["12:00", "19:00"])
+    # Agenda: {mode: manual|auto, per_day, min_gap_hours, new_channel_cap, new_channel_days} (ver posting_times.py)
+    schedule: dict = JsonField({})
     color: str = "#d4a017"
     # Mídia e YouTube
     footage: bool = False  # filmagens reais (NASA/Commons) nas cenas
@@ -198,6 +200,7 @@ class MetricSnapshot(SQLModel, table=True):
     platform: str
     captured_at: datetime = Field(default_factory=now, index=True)
     views: int = 0
+    engaged_views: int = 0  # views engajadas (Analytics) — as que contam p/ monetizar Shorts
     likes: int = 0
     comments: int = 0
     shares: int = 0

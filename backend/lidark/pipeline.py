@@ -450,6 +450,17 @@ def _schedule_publication(video_id: int, when_iso: str, ctx: JobContext) -> None
     from datetime import datetime, timezone
     from .models import Account, Publication, now
     when = datetime.fromisoformat(when_iso).astimezone(timezone.utc)
+    try:  # o render pode atrasar/adiantar: confere de novo o espaço mínimo e o limite diário do canal
+        from . import posting_times
+        with session() as s:
+            v0 = s.get(Video, video_id)
+            ch0 = s.get(Channel, v0.channel_id)
+        moved = posting_times.next_free(ch0, max(when, now()), v0.format or "short")
+        if abs((moved - when).total_seconds()) > 60:
+            ctx.log(f"Horário ajustado para {moved.astimezone(posting_times.TZ):%d/%m %H:%M} (evita posts colados)")
+            when = moved
+    except Exception as e:  # noqa: BLE001
+        ctx.log(f"Checagem de espaçamento falhou ({e}) — mantendo o horário")
     with session() as s:
         v = s.get(Video, video_id)
         sc = s.get(Script, v.script_id)
