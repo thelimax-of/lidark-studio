@@ -17,8 +17,9 @@ from .models import Account, Insight, MetricSnapshot, Publication, Script, Video
 log = logging.getLogger("lidark.retention")
 
 
-def fetch_curve(ya, video_id: str) -> list[list[float]]:
-    r = ya.reports().query(ids="channel==MINE", startDate="2015-01-01",
+def fetch_curve(ya, video_id: str, start: str = "2015-01-01") -> list[list[float]]:
+    # start = data de publicação: com "2015-01-01" a API leva ~30s por vídeo; desde a publicação, ~1s (mesma curva)
+    r = ya.reports().query(ids="channel==MINE", startDate=start,
                            endDate=__import__("datetime").date.today().isoformat(),
                            metrics="audienceWatchRatio,relativeRetentionPerformance",
                            dimensions="elapsedVideoTimeRatio", filters=f"video=={video_id}").execute()
@@ -30,18 +31,20 @@ def collect_curves(acc: Account, pubs: list[Publication]) -> dict[str, list[list
     from .publish import _yt_client, _yt_creds
     if not acc.credentials:
         return {}
-    ya = _yt_client(_yt_creds(acc), "youtubeAnalytics", "v2")
-    out = {}
-    for p in pubs:
-        if not p.external_id:
-            continue
-        try:
-            curve = fetch_curve(ya, p.external_id)
-            if len(curve) >= 20:
-                out[p.external_id] = curve
+    from concurrent.futures import ThreadPoolExecutor
+    creds = _yt_creds(acc)
+
+    def one(p: Publication) -> tuple[str, list[list[float]]]:
+        start = ((p.published_at or p.created_at) - __import__("datetime").timedelta(days=1)).date().isoformat()             if (p.published_at or p.created_at) else "2015-01-01"
+        try:  # um cliente por thread (o httplib2 do cliente do Google não é seguro entre threads)
+            return p.external_id, fetch_curve(_yt_client(creds, "youtubeAnalytics", "v2"), p.external_id, start)
         except Exception as e:  # noqa: BLE001
             log.info("curva %s: %s", p.external_id, e)
-    return out
+            return p.external_id, []
+
+    with ThreadPoolExecutor(4) as ex:
+        res = list(ex.map(one, [p for p in pubs if p.external_id]))
+    return {vid: curve for vid, curve in res if len(curve) >= 20}
 
 
 def value_at(curve: list[list[float]], ratio: float) -> float:
