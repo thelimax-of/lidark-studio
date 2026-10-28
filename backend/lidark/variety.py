@@ -337,7 +337,9 @@ def prompt_block(ch: Channel, p: dict[str, Any], fmt: str) -> str:
             cta_style = CTA_STYLES[0]  # sem pauta confirmada na fila: não promete nada
     chapters = ("" if fmt == "short" else """
 - CAPÍTULOS: organize o vídeo em 5 a 8 blocos. A PRIMEIRA cena de cada bloco ganha o campo "chapter" com o título do
-  capítulo (2-5 palavras, sem número). A cena 1 também tem "chapter". Cada bloco deve ter pelo menos 3 cenas.""")
+  capítulo (2-5 palavras, sem número). A cena 1 também tem "chapter". Cada bloco deve ter pelo menos 3 cenas.
+- TELA FINAL: depois do CTA o vídeo mostra 20 s de tela final com "assista o próximo" e o botão de inscrição; o CTA
+  pode apontar para ela (ex.: "o próximo vídeo está aqui na tela"), sem anunciar um tema que não foi indicado acima.""")
     return f"""VARIEDADE (OBRIGATÓRIO — o canal não pode parecer feito em série):
 - ESTRUTURA NARRATIVA DESTE VÍDEO: "{st['name']}". {st['how']} {st['graphics']}
 - GANCHO: a primeira frase deve ser {HOOKS.get(p.get('hook_style', ''), 'forte')}.

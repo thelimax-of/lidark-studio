@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import { Plus, MonitorPlay as Youtube, Users, Eye, PlaySquare, Loader2, Link2, Sparkles } from 'lucide-react'
 import { api, useApi, type Channel } from '../api'
 import { act, fmtNum, PageHeader, toast, useChannel } from '../ui'
+import { FocusPicker } from './FocusMode'
 
 export async function connectYoutube(channelId?: number) {
   const r: any = await act(() => api(`/youtube/connect${channelId ? `?channel_id=${channelId}` : ''}`, { body: {} }))
@@ -43,6 +44,10 @@ export default function Channels() {
                 <span className="flex items-center gap-1.5"><PlaySquare size={15} className="text-muted" />{c.stats?.videos ?? c.counts?.published ?? 0}</span>
                 <div className="flex-1" />
                 <ChannelState c={c} />
+              </div>
+              <div className="flex items-center gap-2 mt-3 text-[12px] text-muted">
+                <span title="Quanto o piloto automático produz neste canal · ★ = sugerido pelos dados">Modo</span>
+                <FocusPicker channelId={c.id} compact />
               </div>
             </div>
           </Link>

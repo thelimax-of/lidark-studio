@@ -152,7 +152,9 @@ def suggest(channel_id: int) -> dict[str, Any]:
 
     age = _channel_age_days(ch, pubs)
     young = age < cfg["new_channel_days"]
-    per_day = min(cfg["per_day"], cfg["new_channel_cap"]) if young else cfg["per_day"]
+    from .focus import MODES, adjust_per_day, mode
+    focused = adjust_per_day(ch, cfg["per_day"])  # modo foco: Foco +1/dia, Reduzido metade
+    per_day = min(focused, cfg["new_channel_cap"]) if young else focused
     picks = _pick(hours, per_day, cfg["min_gap_hours"])
     data_w = sum(hours[h]["data_weight"] for h in picks) / len(picks) if picks else 0
     basis = []
@@ -167,6 +169,8 @@ def suggest(channel_id: int) -> dict[str, Any]:
         basis.append(f"{crowded} desses vídeos saíram colados em outros (menos de 3 h) e pesam menos — rajadas dividem o teste inicial.")
     if young:
         basis.append(f"Canal novo ({age:.0f} dia(s)): no máximo {cfg['new_channel_cap']} Shorts/dia até {cfg['new_channel_days']} dias.")
+    if focused != cfg["per_day"]:
+        basis.append(f"Modo {MODES[mode(ch)]['label']}: {focused} Short(s)/dia em vez de {cfg['per_day']}.")
     basis.append(f"Espaço mínimo entre posts: {cfg['min_gap_hours']:g} h. Fuso: Brasília.")
     return {"channel_id": channel_id, "name": ch.name, "mode": cfg["mode"], "settings": cfg,
             "slots": [f"{h:02d}:00" for h in sorted(picks)], "per_day": per_day,

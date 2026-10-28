@@ -135,8 +135,10 @@ class JobContext:
 
 def enqueue(kind: str, *, title: str = "", channel_id: int | None = None, ref_id: int | None = None,
             payload: dict | None = None) -> Job:
+    from .focus import job_priority  # modo foco do canal: Foco passa na frente, Reduzido/Pausado vão para o fim
+    prio = job_priority(kind, channel_id)
     with session() as s:
-        j = Job(kind=kind, title=title or kind, channel_id=channel_id, ref_id=ref_id, payload=payload or {})
+        j = Job(kind=kind, title=title or kind, channel_id=channel_id, ref_id=ref_id, payload=payload or {}, priority=prio)
         s.add(j)
         s.commit()
         s.refresh(j)

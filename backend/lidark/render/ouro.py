@@ -448,6 +448,15 @@ class OuroTemplate:
             paste(img, self.coin_big, (W / 2 - self.coin_big.width / 2, 150 * k - self.coin_big.height / 2))
         return img
 
+    def _end_card(self, t: float):
+        """Vídeo longo: depois da narração vem a tela final de 20 s (ver render/endcard.py), no lugar do "SEGUE PRA MAIS"."""
+        if self.vertical or self.tl.fmt != "long" or t < self.tl.narration_end + 0.15:
+            return None
+        if not hasattr(self, "_endcard"):
+            from .endcard import EndCard
+            self._endcard = EndCard(self)
+        return self._endcard
+
     # ================================================================ direção (animações variadas)
 
     def _setup_direction(self) -> None:
@@ -495,6 +504,8 @@ class OuroTemplate:
         tl, k = self.tl, self.k
         if not hasattr(self, "plans"):
             self._setup_direction()
+        if self._end_card(t):
+            return self._end_card(t).frame(t, i)
         out = self.bg.copy()
         self.particles.draw(out, t)
         in_outro = t >= tl.narration_end + 0.15
@@ -538,13 +549,21 @@ class OuroTemplate:
 
     def _graphic_frame(self, sc: SceneT, t: float) -> Image.Image:
         g = self.graphics[sc.index]
-        local = max(0.0, t - sc.start - fx.EXIT_DUR * 0.4)
-        if t >= sc.end - 0.02 and sc.index in self._graphic_last:
+        dur = max(0.5, sc.end - sc.start - fx.EXIT_DUR * 0.4)
+        # no fim da cena o gráfico congela num instante fixo — o 1º quadro a partir de fim-0.05s — que não depende
+        # da ordem em que os quadros são desenhados (o render em paralelo desenha trechos fora de ordem)
+        fps = self.tl.fps
+        i = math.ceil((sc.end - 0.05) * fps)
+        while i / fps < sc.end - 0.05:
+            i += 1
+        while (i - 1) / fps >= sc.end - 0.05:
+            i -= 1
+        t_last = i / fps if i / fps < sc.end else sc.end - 0.01
+        if t >= t_last:
+            if sc.index not in self._graphic_last:
+                self._graphic_last[sc.index] = g.render(max(0.0, t_last - sc.start - fx.EXIT_DUR * 0.4), dur)
             return self._graphic_last[sc.index]
-        img = g.render(local, max(0.5, sc.end - sc.start - fx.EXIT_DUR * 0.4))
-        if t >= sc.end - 0.05:
-            self._graphic_last[sc.index] = img
-        return img
+        return g.render(max(0.0, t - sc.start - fx.EXIT_DUR * 0.4), dur)
 
     @lru_cache(maxsize=1)
     def _card_clip(self) -> Image.Image:

@@ -53,6 +53,7 @@ DEFAULTS: dict[str, Any] = {
     "no_attribution_only": True,  # só imagens/músicas que dispensam crédito (domínio público, CC0, NASA, Pexels)
     # Render
     "use_nvenc": True,
+    "render_workers": 0,  # processos desenhando quadros em paralelo (0 = automático pelos núcleos e RAM livre; 1 = desliga)
     "whisper_model": "small",
     "whisper_device": "cuda",
 }

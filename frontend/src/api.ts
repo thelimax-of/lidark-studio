@@ -40,8 +40,9 @@ export type Channel = {
   synced_at: string | null; setup_status: string; connected?: boolean
   radar?: { keywords?: string[]; competitors?: string[]; competitor_names?: Record<string, string> }
   counts?: { ideas: number; scripts: number; videos: number; published: number }
-  footage?: boolean; image_credit_ok?: boolean; yt_category?: string; thumbs_blocked?: boolean
+  footage?: boolean; image_credit_ok?: boolean; yt_category?: string; thumbs_blocked?: boolean; seed_comment_off?: boolean
   schedule?: { mode?: 'manual' | 'auto'; per_day?: number; min_gap_hours?: number; new_channel_cap?: number; new_channel_days?: number }
+  focus?: string  // modo foco: foco | normal | reduzido | pausado ('' = normal) — muda por PUT /channels/{id}/focus
 }
 
 export type Idea = {

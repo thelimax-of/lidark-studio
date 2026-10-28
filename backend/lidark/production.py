@@ -347,6 +347,9 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
         st.end = float(scene_ts[i + 1].start if i + 1 < n else narration_end)
     # a tela final pode completar no máximo 3s (nunca fica repetindo o encerramento)
     duration = narration_end + OUTRO_SECONDS + min(3.0, max(0.0, min_total - narration_end - OUTRO_SECONDS))
+    if sc.format == "long" and not vertical:  # tela final de 20 s ("assista o próximo" + inscrição) p/ os elementos do YouTube
+        from .render.endcard import END_SCREEN_SECONDS
+        duration = narration_end + 0.15 + END_SCREEN_SECONDS
     if vertical and duration < min_total - 6:
         ctx.log(f"⚠ Vídeo com {duration:.0f}s (planejado ≈{min_total + 4:.0f}s) — roteiro ficou curto mesmo após expansão")
     if vertical and duration > 180:
@@ -354,7 +357,7 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
 
     # 5) direção de animação + envelope da voz (boca do mascote) ----------------------------
     env = _envelope(voice["path"], duration)
-    tl = Timeline(W, H, FPS, duration, narration_end, sc.title, scene_ts, steps, words, env, {**(ch.theme or {}), "_look": plan.get("look") or {}}, sc.format,
+    tl = Timeline(W, H, FPS, duration, narration_end, sc.title, scene_ts, steps, words, env, {**(ch.theme or {}), "_look": plan.get("look") or {}, "_series": plan.get("series") or ""}, sc.format,
                   hook=(sc.thumbnail_text or "").strip())
     template = _template(tpl, tl)
     impacts = list(getattr(template, "impacts", []))
@@ -374,13 +377,19 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
     # 7) render -------------------------------------------------------------------------
     out = workdir / f"{ch.slug}_{video_id}.mp4"
     ctx.update(0.62, "Renderizando vídeo")
-    render(tl, template, out, final_audio, progress=lambda p: ctx.update(0.62 + 0.35 * p, f"Renderizando vídeo {int(p * 100)}%"))
+    # a busca da imagem da miniatura (rede + IA de visão) corre enquanto o vídeo renderiza
+    thumb_ex = ThreadPoolExecutor(1)
+    thumb_bg = thumb_ex.submit(thumbnail_background, sc, scenes, context, ch, used_urls, ctx)
+    try:
+        render(tl, template, out, final_audio, progress=lambda p: ctx.update(0.62 + 0.35 * p, f"Renderizando vídeo {int(p * 100)}%"))
+    finally:
+        thumb_ex.shutdown(wait=False, cancel_futures=True)
 
     # 8) thumbnail -----------------------------------------------------------------------
     from .render.thumbnail import make_thumbnail
     # miniatura: a imagem da abertura representa o título; senão, a de maior nota
     best = 0 if (picks and picks[0] and picks[0].get("path") and picks[0].get("score", 0) >= 60) else         max((k for k, p in enumerate(picks) if p and p.get("path")), key=lambda k: picks[k].get("score", 0), default=None)
-    bg_img = thumbnail_background(sc, scenes, context, ch, used_urls, ctx) or         (images[best] if best is not None else next((im for im in images if im is not None), None))
+    bg_img = thumb_bg.result() or         (images[best] if best is not None else next((im for im in images if im is not None), None))
     thumb_text = (sc.thumbnail_text or sc.title.replace("#Shorts", "")).strip()
     thumb = make_thumbnail(bg_img, thumb_text, ch.theme or {}, workdir / "thumb.jpg", vertical,
                            variant=int(plan.get("thumb_variant", video_id)))

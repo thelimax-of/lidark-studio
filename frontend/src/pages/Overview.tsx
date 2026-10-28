@@ -3,6 +3,8 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import { AlertTriangle, ArrowUpRight } from 'lucide-react'
 import { useApi } from '../api'
 import { fmtNum, PageHeader, SectionTitle, seriesColor, Skeleton, Sparkline, useChannel } from '../ui'
+import { FocusBadge, useFocus } from './FocusMode'
+import { ChampionsCard } from './Champions'
 
 type Period = { views: number; minutes: number; subs: number; likes: number; shares: number; engaged_views?: number }
 type ChannelSum = {
@@ -23,6 +25,7 @@ export default function AllChannels({ scope, onOpen }: { scope: ReactNode; onOpe
   const { channels } = useChannel()
   const [days, setDays] = useState(28)
   const { data, isLoading } = useApi<Overview>(`/overview?days=${days}`)
+  const { data: focus } = useFocus()  // modo foco de cada canal + sugestão pelos dados
   const t = data?.totals
   const d = data?.daily ?? []
   const list = data?.channels ?? []
@@ -85,6 +88,9 @@ export default function AllChannels({ scope, onOpen }: { scope: ReactNode; onOpe
         ))}
       </section>
 
+      {/* Shorts campeões → vídeos longos (horas assistidas para o YPP) */}
+      <ChampionsCard />
+
       {/* views diárias por canal */}
       <section className="card overflow-hidden">
         <SectionTitle hint="Uma linha por canal · o YouTube libera os dados com 2 a 3 dias de atraso">Views por dia</SectionTitle>
@@ -124,6 +130,7 @@ export default function AllChannels({ scope, onOpen }: { scope: ReactNode; onOpe
             <table className="w-full text-sm">
               <thead className="text-[12px] text-muted border-b border-line">
                 <tr><th className="text-left px-4 py-2 font-medium">Canal</th>
+                  <th className="text-left px-3 py-2 font-medium" title="Modo foco atual · passe o mouse para ver o porquê da sugestão">Modo</th>
                   {cols.map(c => <th key={c.label} title={c.hint} className="text-right px-3 py-2 font-medium whitespace-nowrap">{c.label}</th>)}
                   <th className="w-10" /></tr>
               </thead>
@@ -139,6 +146,7 @@ export default function AllChannels({ scope, onOpen }: { scope: ReactNode; onOpe
                         </div>
                       </div>
                     </td>
+                    <td className="px-3"><FocusBadge info={focus?.channels.find(f => f.channel_id === ch.id)} /></td>
                     {cols.map((c, k) => {
                       const v = c.get(ch), r = ranks[k]
                       const tone = r && v > 0 ? (v === r.best ? 'text-ok font-medium' : v === r.worst ? 'text-bad' : '') : ''

@@ -130,11 +130,29 @@ def get_channel(cid: int, s: Session = Depends(get_session)):
 def update_channel(cid: int, data: dict[str, Any], s: Session = Depends(get_session)):
     ch = _get(s, Channel, cid)
     _patch(ch, data, skip=("id", "created_at", "slug", "youtube_id", "synced_at", "stats", "setup_status",
-                                "series", "playlists", "campaigns"))  # mantidos pelo próprio sistema
+                                "series", "playlists", "campaigns",  # mantidos pelo próprio sistema
+                                "focus"))  # modo foco tem rota própria (um formulário antigo não o sobrescreve)
     s.add(ch)
     s.commit()
     s.refresh(ch)
     return ch
+
+
+@router.get("/focus")
+def focus_all():
+    """Modo foco de cada canal + o modo sugerido pelos dados (só sugestão: quem troca é o dono)."""
+    from . import focus
+    return {"modes": focus.modes_meta(), "channels": focus.suggest_all()}
+
+
+@router.put("/channels/{cid}/focus")
+def set_channel_focus(cid: int, data: dict[str, Any], s: Session = Depends(get_session)):
+    from . import focus
+    _get(s, Channel, cid)
+    if data.get("mode") not in focus.MODES:
+        raise HTTPException(400, "Modo inválido")
+    focus.set_mode(cid, data["mode"])
+    return {"ok": True, "mode": data["mode"]}
 
 
 @router.get("/channels/{cid}/posting-times")
@@ -292,7 +310,7 @@ def create_idea(body: IdeaIn, s: Session = Depends(get_session)):
 def discover(data: dict[str, Any]):
     cid = data["channel_id"]
     j = jobs.enqueue("discover_ideas", title="Buscar pautas" + (f": {data['seed']}" if data.get("seed") else ""),
-                     channel_id=cid, payload={k: data.get(k) for k in ("count", "seed", "format") if data.get(k)})
+                     channel_id=cid, payload={k: data.get(k) for k in ("count", "seed", "format", "campaign") if data.get(k)})
     return jobs.job_dict(j)
 
 
@@ -737,6 +755,30 @@ def video_shorts_from_long(vid: int, s: Session = Depends(get_session)):
     return {"job_id": jobs.enqueue("shorts_from_long", title="Shorts a partir do longo", channel_id=v.channel_id, ref_id=vid).id}
 
 
+@router.get("/champions")
+def champions_api(channel_id: Optional[int] = None, limit: int = 6):
+    """Shorts campeões (alcance, retenção, views engajadas) que valem virar vídeo longo — o funil para horas assistidas."""
+    from .longform import champions, champions_all
+    return champions(channel_id, max(1, min(limit, 30))) if channel_id else champions_all(max(1, min(limit, 10)))
+
+
+@router.post("/channels/{cid}/champions/long")
+def champion_to_long(cid: int, data: dict[str, Any], s: Session = Depends(get_session)):
+    """Transformar em vídeo longo: pesquisa, planeja capítulos com fontes, checa, dá nota e escreve o roteiro (sem renderizar)."""
+    ch = _get(s, Channel, cid)
+    key = str(data.get("key") or "")
+    if not key:
+        raise HTTPException(400, "Informe o Short")
+    busy = s.exec(select(Job).where(Job.kind == "champion_long", Job.channel_id == cid,
+                                    Job.status.in_(("queued", "running")))).all()
+    for j in busy:
+        if str((j.payload or {}).get("key")) == key:
+            return jobs.job_dict(j)
+    title = str(data.get("title") or "")[:60]
+    return jobs.job_dict(jobs.enqueue("champion_long", title=f"Short campeão → vídeo longo: {title or ch.name}",
+                                      channel_id=cid, payload={"key": key}))
+
+
 @router.get("/channels/{cid}/experiments")
 def channel_experiments(cid: int):
     from .growth import experiments
@@ -786,6 +828,30 @@ def channel_campaigns_save(cid: int, body: CampaignsIn, s: Session = Depends(get
     return {"campaigns": clean}
 
 
+@router.get("/channels/{cid}/enem")
+def channel_enem(cid: int, s: Session = Depends(get_session)):
+    """Pacote da campanha ENEM: pautas de História que mais caem, horários até a prova e status de cada uma."""
+    from . import enem
+    ch = s.get(Channel, cid)
+    if not ch:
+        raise HTTPException(404, "Canal não encontrado")
+    return enem.pack(ch)
+
+
+class EnemLaunchIn(BaseModel):
+    keys: list[str]
+    schedule_longs: bool = False
+
+
+@router.post("/channels/{cid}/enem/launch")
+def channel_enem_launch(cid: int, body: EnemLaunchIn, s: Session = Depends(get_session)):
+    from . import enem
+    ch = s.get(Channel, cid)
+    if not ch:
+        raise HTTPException(404, "Canal não encontrado")
+    return enem.launch(ch, body.keys, body.schedule_longs)
+
+
 @router.get("/comments")
 def list_comments(channel_id: Optional[int] = None, status: str = "new", s: Session = Depends(get_session)):
     """Sem channel_id: caixa única com os comentários de todos os canais."""
@@ -794,10 +860,13 @@ def list_comments(channel_id: Optional[int] = None, status: str = "new", s: Sess
 
     def where(q):
         return q.where(Comment.channel_id == channel_id) if channel_id else q
+    order = [Comment.pinned, Comment.published_at.desc()] if status == "seed" else [Comment.published_at.desc()]  # a fixar primeiro
     rows = s.exec(where(select(Comment).where(Comment.status == status))
-                  .order_by(Comment.published_at.desc()).limit(200 if not channel_id else 100)).all()
+                  .order_by(*order).limit(200 if not channel_id else 100)).all()
     counts = {st: s.exec(where(select(func.count()).select_from(Comment).where(Comment.status == st))).one()
-              for st in ("new", "replied", "ignored")}
+              for st in ("new", "replied", "ignored", "seed")}
+    counts["to_pin"] = s.exec(where(select(func.count()).select_from(Comment).where(Comment.status == "seed",
+                                                                                  Comment.pinned == False))).one()  # noqa: E712
     ids = [channel_id] if channel_id else [c.id for c in s.exec(select(Channel)).all()]
     by_channel = {i: can_write(_account(i)) for i in ids}
     return {"items": rows, "counts": counts, "can_write": all(by_channel.values()) if by_channel else False,
@@ -830,6 +899,19 @@ def comment_ignore(cid: int, s: Session = Depends(get_session)):
     s.add(c)
     s.commit()
     return {"ok": True}
+
+
+@router.post("/comments/{cid}/pinned")
+def comment_pinned(cid: int, s: Session = Depends(get_session)):
+    """Você fixou o comentário do canal no YouTube (a API não permite fixar) — sai da lista "a fixar"."""
+    from .models import Comment
+    c = s.get(Comment, cid)
+    if not c:
+        raise HTTPException(404, "Comentário não encontrado")
+    c.pinned = not c.pinned
+    s.add(c)
+    s.commit()
+    return {"pinned": c.pinned}
 
 
 @router.post("/channels/{cid}/comments/refresh")

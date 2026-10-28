@@ -70,12 +70,14 @@ class Channel(SQLModel, table=True):
     posting_slots: list = JsonField(["12:00", "19:00"])
     # Agenda: {mode: manual|auto, per_day, min_gap_hours, new_channel_cap, new_channel_days} (ver posting_times.py)
     schedule: dict = JsonField({})
+    focus: str = "normal"  # modo foco: foco | normal | reduzido | pausado (ver focus.py; o dono decide)
     color: str = "#d4a017"
     # Mídia e YouTube
     footage: bool = False  # filmagens reais (NASA/Commons) nas cenas
     image_credit_ok: bool = False  # aceita fotos CC BY/BY-SA (créditos vão na descrição)
     yt_category: str = "27"  # 27 Educação · 17 Esportes · 28 Ciência e tecnologia
     thumbs_blocked: bool = False  # YouTube recusou miniatura (canal sem verificação por telefone)
+    seed_comment_off: bool = False  # True = não posta o comentário do canal que puxa conversa após publicar
     created_at: datetime = Field(default_factory=now)
 
 
@@ -237,8 +239,12 @@ class Comment(SQLModel, table=True):
     kind: str = ""  # pergunta | elogio | correcao | sugestao | critica | spam | outro
     suggestion: str = TextField()
     reply: str = TextField()
-    status: str = Field(default="new", index=True)  # new | replied | ignored
+    status: str = Field(default="new", index=True)  # new | replied | ignored | seed (comentário do próprio canal)
     replied_at: Optional[datetime] = None
+    # Comentário-semente do canal (puxa conversa logo após publicar): estilo usado e se você já fixou no YouTube
+    seed_style: str = ""  # pergunta | escolha | proximo | opiniao | vivencia
+    pinned: bool = False
+    replies: int = 0
     created_at: datetime = Field(default_factory=now)
 
 

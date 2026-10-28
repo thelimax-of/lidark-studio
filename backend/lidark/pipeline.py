@@ -202,8 +202,17 @@ def job_write_script(ctx: JobContext) -> dict:
     extra0 = ctx.payload.get("extra", "")
     if camp:
         extra0 = (extra0 + chr(10) + f"Este vídeo faz parte da campanha \"{camp['name']}\": {camp.get('focus')}").strip()
+        from . import enem
+        if enem.is_enem(camp):  # campanha de prova: SEO de revisão honesto (sem prometer questão garantida)
+            extra0 += chr(10) + enem.seo_rules(fmt)
         ctx.payload["extra"] = extra0
     plan0 = None
+    forced = next((str(t)[10:] for t in idea.tags or [] if str(t).startswith("estrutura:")), "")
+    if forced and "mito_verdade" not in (idea.tags or []):  # estrutura escolhida na pauta (ex.: pacote ENEM)
+        from . import variety as _v
+        if fmt in _v.STRUCTURES.get(forced, {}).get("formats", ()):
+            plan0 = _v.plan(ch, fmt)
+            plan0.update(structure=forced, music_mood=_v.STRUCTURES[forced]["mood"])
     if "mito_verdade" in (idea.tags or []):
         from . import variety as _v
         plan0 = _v.plan(ch, fmt)
@@ -212,6 +221,9 @@ def job_write_script(ctx: JobContext) -> dict:
                   "que ela é FALSA. Nunca afirme o mito como verdade. " + idea.summary).strip()
         ctx.payload["extra"] = extra0  # a reescrita anti-repetição também mantém a instrução
         ctx.log("Pauta mito × verdade: o roteiro vai desmentir a crença")
+    if ctx.payload.get("plan_extra"):  # ex.: longo de um Short campeão (duração de 8-12 min e o Short de origem)
+        from . import variety as _v
+        plan0 = {**(plan0 or _v.plan(ch, fmt)), **ctx.payload["plan_extra"]}
     data = content.write_script(ch, idea, fmt, extra0, plan=plan0)
     from . import variety
     probs = variety.repetition_problems(ch.id, data.get("title", ""), data.get("hook", ""), data.get("scenes", []))
@@ -258,7 +270,10 @@ def job_write_script(ctx: JobContext) -> dict:
     _review(ch, sc.id, ctx, auto_fix=True)
     _ensure_length(ch, sc.id, ctx)
     _check_claims(ch, sc.id, ctx)
-    if ctx.payload.get("auto_render"):
+    from . import focus
+    if ctx.payload.get("auto_render") and focus.paused(ch.id):  # pausado no meio do caminho: roteiro fica salvo
+        ctx.log("Canal pausado (modo foco): roteiro salvo, sem render automático")
+    elif ctx.payload.get("auto_render"):
         enqueue("render_video", title=f"Vídeo: {sc.title}", channel_id=ch.id, ref_id=sc.id,
                 payload={k: ctx.payload[k] for k in ("publish_at",) if ctx.payload.get(k)})
     return {"script_id": sc.id}
@@ -450,6 +465,12 @@ def _schedule_publication(video_id: int, when_iso: str, ctx: JobContext) -> None
     from datetime import datetime, timezone
     from .models import Account, Publication, now
     when = datetime.fromisoformat(when_iso).astimezone(timezone.utc)
+    from . import focus
+    with session() as s:
+        vch = s.get(Video, video_id)
+    if vch and focus.paused(vch.channel_id):
+        ctx.log("Canal pausado (modo foco): vídeo pronto, mas não agendado — publique à mão se quiser")
+        return
     try:  # o render pode atrasar/adiantar: confere de novo o espaço mínimo e o limite diário do canal
         from . import posting_times
         with session() as s:
@@ -480,6 +501,9 @@ def job_autopilot(ctx: JobContext) -> dict:
     """Pega a melhor pauta aprovada (ou com nota alta) do formato do horário e produz o vídeo inteiro."""
     ch = _channel(ctx.channel_id)
     fmt = ctx.payload.get("format", "short")
+    from . import focus
+    if ctx.payload.get("publish_at") and focus.paused(ch):  # disparo do horário antes de o canal ser pausado
+        return {"msg": "canal pausado (modo foco): nada novo produzido"}
     with session() as s:
         q = select(Idea).where(Idea.channel_id == ch.id, Idea.status.in_(["approved", "new"]),
                                Idea.fact_status == "verified").order_by(Idea.score.desc())

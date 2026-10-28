@@ -277,3 +277,438 @@ Responda JSON: {{"shorts": [{{"title": "título do Short (máx 70)", "hook": "1�
 @handler("shorts_from_long")
 def job_shorts_from_long(ctx: JobContext) -> dict:
     return {"scripts": shorts_from_long(ctx.ref_id, ctx)}
+
+
+# ================================================================ Short campeão → vídeo longo
+# Para o YPP o caminho realista é o de HORAS ASSISTIDAS (4.000 h em 12 meses; 8.000 h para quem se inscrever a partir
+# de 01/02/2027) — e minutos de Shorts não contam. O Short vira funil: o tema que provou que prende o público ganha
+# um vídeo longo de 8-12 min, aprofundado com fontes (fatos novos, não enchimento).
+
+CHAMPION_MIN_HOURS = 24  # antes disso as views ainda estão subindo e o Analytics nem chegou
+_W = {"reach": 0.40, "retention": 0.30, "interaction": 0.15, "subs": 0.10, "engaged": 0.05}
+
+
+def _median(xs: list[float]) -> float:
+    xs = sorted(x for x in xs if x is not None)
+    if not xs:
+        return 0.0
+    m = len(xs) // 2
+    return xs[m] if len(xs) % 2 else (xs[m - 1] + xs[m]) / 2
+
+
+def _vs_median(x: float, ref: float) -> float:
+    """0-100: 50 = igual à mediana do canal, +25 a cada vez que dobra (−25 a cada metade)."""
+    import math
+    if ref <= 0:
+        return 50.0
+    return max(0.0, min(100.0, 50 + 25 * math.log2(max(x, ref / 16) / ref)))
+
+
+def _short_candidates(channel_id: int) -> list[dict[str, Any]]:
+    """Shorts publicados do canal com métricas (da tabela de desempenho) + dados para ligar o longo a eles."""
+    from datetime import datetime, timezone
+    from .analytics import latest_metrics, performance_table
+    rows = performance_table(channel_id)
+    metrics = latest_metrics(channel_id)
+    out = []
+    with session() as s:
+        pubs = s.exec(select(Publication).where(Publication.channel_id == channel_id, Publication.status == "published")).all()
+        subs: dict = {}
+        ext: dict = {}
+        for p in pubs:
+            key = p.video_id if p.video_id else f"ext:{p.external_id or p.id}"
+            m = metrics.get(p.id)
+            subs[key] = subs.get(key, 0) + ((m.subscribers_gained or 0) if m else 0)
+            if p.platform == "youtube" and p.external_id:
+                ext[key] = p
+        for r in rows:
+            key = r["video_id"]
+            v = s.get(Video, key) if isinstance(key, int) else None
+            sc = s.get(Script, v.script_id) if v else None
+            if v:
+                if v.format != "short" or (sc and (sc.variety or {}).get("from_long")):
+                    continue  # Short tirado de um longo: o tema já tem vídeo longo
+            elif not ("/shorts/" in (r.get("url") or "") or 0 < (r.get("duration") or 0) <= 180):
+                continue
+            pub = ext.get(key)
+            age_h = 0.0
+            if r.get("published_at"):
+                dt = datetime.fromisoformat(r["published_at"])
+                age_h = (datetime.now(timezone.utc) - (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc))).total_seconds() / 3600
+            out.append({**r, "key": str(key), "age_hours": round(age_h, 1), "subs": subs.get(key, 0),
+                        "external_id": pub.external_id if pub else "", "publication_id": pub.id if pub else None,
+                        "script_id": sc.id if sc else None,
+                        "text": sc.full_text if sc else (pub.description if pub else "")})
+    return out
+
+
+def champions(channel_id: int, limit: int = 6) -> list[dict[str, Any]]:
+    """Shorts campeões do canal: alcance (views/dia, relativo à mediana), retenção, views engajadas, interação e inscritos.
+
+    Cada item traz a nota 0-100, os motivos em português, a confiança dos dados e se já virou vídeo longo."""
+    import math
+    cands = _short_candidates(channel_id)
+    if not cands:
+        return []
+    for c in cands:
+        days = max(1.0, c["age_hours"] / 24)
+        c["_vel"] = c["views"] / math.sqrt(days)  # amortecido: Shorts ganham quase tudo nos 2 primeiros dias
+        c["_int"] = (c["likes"] + 2 * c["comments"] + 3 * c["shares"]) / max(1, c["views"])
+        c["_subs"] = 1000 * c["subs"] / max(1, c["views"])
+    med = {k: _median([c[k] for c in cands]) for k in ("_vel", "_int", "_subs", "views")}
+    eng = [c for c in cands if c.get("engaged_views") is not None and c["views"]]
+    med_eng = _median([c["engaged_views"] / c["views"] for c in eng])
+    status = _champion_status(channel_id)
+    out = []
+    for c in cands:
+        # alcance: views totais e ritmo (views/√dias) contra a mediana dos Shorts do canal
+        parts: dict[str, float] = {"reach": (_vs_median(c["views"], med["views"]) + _vs_median(c["_vel"], med["_vel"])) / 2}
+        why = []
+        if med["views"] and c["views"] >= 1.3 * med["views"]:
+            why.append(f"{c['views'] / med['views']:.1f}× as views da mediana dos Shorts do canal")
+        if c["retention"] > 0:  # % média assistida (Shorts passam de 100% quando o público assiste de novo)
+            parts["retention"] = max(0.0, min(100.0, (c["retention"] - 40) * 1.25))  # 80% → 50 · 120% → 100
+            if c["retention"] >= 75:
+                why.append(f"retenção média de {c['retention']:.0f}%" + (" (assistem de novo)" if c["retention"] > 100 else ""))
+        if c["views"] >= 30:
+            parts["interaction"] = _vs_median(c["_int"], med["_int"])
+            if med["_int"] and c["_int"] >= 1.5 * med["_int"]:
+                why.append(f"engajamento {c['_int'] / med['_int']:.1f}× acima da mediana")
+        if c in eng and len(eng) >= 2:  # views engajadas chegam com ~2 dias de atraso: só compara entre os que têm
+            parts["engaged"] = _vs_median(c["engaged_views"] / c["views"], med_eng)
+        if c["subs"] > 0:
+            parts["subs"] = _vs_median(c["_subs"], med["_subs"] or c["_subs"] / 2)
+            why.append(f"+{c['subs']} inscritos")
+        missing_ret = "retention" not in parts
+        if missing_ret:  # Analytics ainda não chegou (~2 dias): retenção neutra, para não premiar quem não tem dado
+            parts["retention"] = 50.0
+        wsum = sum(_W[k] for k in parts)
+        score = round(sum(parts[k] * _W[k] for k in parts) / wsum)
+        conf = "alta" if not missing_ret and c["views"] >= 300 else "média" if c["views"] >= 100 else "baixa"
+        early = c["age_hours"] < CHAMPION_MIN_HOURS
+        st = status.get(c["key"]) or {}
+        out.append({
+            "key": c["key"], "channel_id": channel_id, "title": c["title"].replace("#Shorts", "").replace("#shorts", "").strip(),
+            "url": c.get("url"), "thumbnail": c.get("thumbnail"), "published_at": c.get("published_at"),
+            "views": c["views"], "engaged_views": c.get("engaged_views"), "retention": round(c["retention"], 1),
+            "likes": c["likes"], "comments": c["comments"], "shares": c["shares"], "subs": c["subs"],
+            "score": score, "parts": {k: round(v) for k, v in parts.items() if not (k == "retention" and missing_ret)},
+            "reasons": why, "confidence": conf,
+            "early": early, "champion": score >= 55 and c["views"] >= max(100, med["views"]) and not early,
+            "age_hours": c["age_hours"], **st,
+        })
+    out.sort(key=lambda x: (-x["champion"], -x["score"]))
+    return out[:limit]
+
+
+def champions_all(limit: int = 4) -> list[dict[str, Any]]:
+    from .models import Channel as _Ch
+    with session() as s:
+        chans = s.exec(select(_Ch).order_by(_Ch.id)).all()
+    out = []
+    for ch in chans:
+        out += [{**c, "channel_name": ch.name} for c in champions(ch.id, limit)]
+    out.sort(key=lambda x: (-x["champion"], -x["score"]))
+    return out
+
+
+def _champion_status(channel_id: int) -> dict[str, dict[str, Any]]:
+    """Shorts que já viraram (ou estão virando) vídeo longo: pauta → roteiro → vídeo."""
+    from .models import Idea, Job
+    out: dict[str, dict[str, Any]] = {}
+    with session() as s:
+        for j in s.exec(select(Job).where(Job.kind == "champion_long", Job.channel_id == channel_id,
+                                          Job.status.in_(("queued", "running")))).all():
+            out[str((j.payload or {}).get("key"))] = {"long_status": "working", "job_id": j.id}
+        for idea in s.exec(select(Idea).where(Idea.channel_id == channel_id, Idea.format == "long")).all():
+            key = next((t.split(":", 1)[1] for t in (idea.tags or []) if str(t).startswith("campeao:")), None)
+            if not key or (key in out and idea.status in ("discarded", "rejected")):
+                continue
+            sc = s.exec(select(Script).where(Script.idea_id == idea.id).order_by(Script.id.desc())).first()
+            v = s.exec(select(Video).where(Video.script_id == sc.id).order_by(Video.id.desc())).first() if sc else None
+            st = ("discarded" if idea.status in ("discarded", "rejected") else "published" if v and v.status == "published"
+                  else "video" if v else "script" if sc else "idea")
+            if out.get(key, {}).get("long_status") == "working" and st in ("idea", "discarded"):
+                continue
+            out[key] = {"long_status": st, "idea_id": idea.id, "long_title": idea.title,
+                        "script_id": sc.id if sc else None, "long_video_id": v.id if v else None}
+    return out
+
+
+def propose_long(channel_id: int, key: str, ctx: JobContext | None = None) -> dict[str, Any]:
+    """Proposta de vídeo longo (8-12 min, em capítulos) que aprofunda o tema do Short campeão com fontes reais.
+
+    Devolve {"viable": False, "reason"} quando as fontes não sustentam 8 min sem enchimento."""
+    from . import content
+    from .models import Channel as _Ch, Idea
+    with session() as s:
+        ch = s.get(_Ch, channel_id)
+        long_titles = [i.title for i in s.exec(select(Idea).where(Idea.channel_id == channel_id, Idea.format == "long",
+                                                                   Idea.status != "discarded")).all()]
+    champ = next((c for c in _short_candidates(channel_id) if c["key"] == str(key)), None)
+    if not champ:
+        raise RuntimeError("Short não encontrado entre os publicados do canal")
+    topic = champ["title"].replace("#Shorts", "").replace("#shorts", "").strip()
+    if ctx:
+        ctx.update(0.1, "Pesquisando fontes para aprofundar o tema")
+    srcs = _research(ch, topic, champ.get("text") or "")
+    if len(srcs) < 2:
+        return {"viable": False, "reason": "fontes insuficientes para um vídeo longo sobre este tema", "short": topic}
+    material = "\n\n".join(f"[{i + 1}] {x['title']} ({x['url']})\n{x['text'][:3500]}" for i, x in enumerate(srcs))
+    perf = (f"{champ['views']} views" + (f", retenção {champ['retention']:.0f}%" if champ["retention"] else "")
+            + (f", {champ['engaged_views']} views engajadas" if champ.get("engaged_views") is not None else ""))
+    if ctx:
+        ctx.update(0.4, "Planejando os capítulos do vídeo longo")
+    data = llm.complete_json(f"""{content.channel_brief(ch)}
+
+SHORT CAMPEÃO DO CANAL: "{topic}" ({perf}) — o público provou que quer este assunto.
+NARRAÇÃO DO SHORT: {champ.get('text', '')[:1500] or '(indisponível)'}
+
+FONTES DE PESQUISA:
+{material}
+
+VÍDEOS LONGOS JÁ PLANEJADOS NO CANAL (não repita):
+{chr(10).join('- ' + t for t in long_titles[-40:]) or '(nenhum)'}
+
+Planeje um VÍDEO LONGO (8 a 12 minutos, horizontal) que APROFUNDA o tema do Short para quem quer saber mais.
+Regras:
+- Algumas fontes podem ser de OUTRO assunto (homônimos, temas vizinhos, misticismo): liste em "relevant_sources" só as
+  que tratam DIRETAMENTE do tema e são confiáveis, e use SOMENTE elas.
+- Profundidade REAL: contexto, causas, personagens, desdobramentos, consequências e o que o Short não teve tempo de contar.
+  Cada capítulo precisa de fatos ESPECÍFICOS das fontes acima (datas, nomes, números) — indique os números das fontes.
+- Proibido enchimento: nada de repetir o Short, resumos redundantes, "curiosidades" genéricas ou especulação.
+- Se as fontes NÃO sustentam pelo menos 8 minutos de conteúdo novo e verificável, responda "viable": false e explique.
+- A duração ("minutes", 8 a 12) é proporcional ao material que existe de verdade.
+- Título pensado para BUSCA (o termo que as pessoas pesquisam logo no começo), honesto e chamativo; máx 60 caracteres.
+- 6 a 9 capítulos; o primeiro abre com o gancho mais forte (pode partir da pergunta que o Short deixou no ar).
+Responda JSON: {{"viable": true, "reason": "por que o tema rende (ou não) um vídeo longo", "relevant_sources": [1, 2, 3],
+  "title": "...", "angle": "o fio condutor / a grande pergunta do vídeo", "summary": "resumo factual em 3-4 frases",
+  "minutes": 10, "hook": "primeira frase do vídeo",
+  "chapters": [{{"title": "2-5 palavras", "beats": "o que este capítulo mostra, com os fatos específicos", "sources": [1, 2]}}],
+  "open_questions": ["perguntas que o Short levantou e o longo responde"], "search_terms": ["termos de busca"]}}""",
+                             temperature=0.5)
+    if not isinstance(data, dict):
+        raise RuntimeError("a IA não devolveu uma proposta")
+    ok = {i for i in (data.get("relevant_sources") or []) if isinstance(i, int)} or set(range(1, len(srcs) + 1))
+    chapters = []
+    for c in data.get("chapters") or []:
+        idx = [i for i in (c.get("sources") or []) if isinstance(i, int) and 1 <= i <= len(srcs) and i in ok]
+        if c.get("title") and c.get("beats") and idx:  # capítulo sem fonte = enchimento: sai
+            chapters.append({"title": str(c["title"])[:60], "beats": str(c["beats"])[:600],
+                             "sources": [srcs[i - 1]["url"] for i in idx]})
+    out = {"short": topic, "short_key": str(key), "short_url": champ.get("url") or "", "short_ext": champ.get("external_id") or "",
+           "title": str(data.get("title") or topic)[:100], "angle": str(data.get("angle") or ""),
+           "summary": str(data.get("summary") or ""), "hook": str(data.get("hook") or ""), "chapters": chapters,
+           "open_questions": [str(q) for q in (data.get("open_questions") or [])][:6],
+           "search_terms": [str(q) for q in (data.get("search_terms") or [])][:8], "reason": str(data.get("reason") or ""),
+           "sources": [{"title": x["title"], "url": x["url"]} for i, x in enumerate(srcs) if i + 1 in ok]}
+    used = {u for c in chapters for u in c["sources"]}
+    if not data.get("viable", True) or len(chapters) < 5 or len(used) < 3:
+        return {**out, "viable": False,
+                "reason": out["reason"] if not data.get("viable", True) else
+                f"só {len(chapters)} capítulo(s) com fonte relevante" if len(chapters) < 5 else
+                f"só {len(used)} fonte(s) relevante(s) sustentam o vídeo — pouco para 8 min sem enchimento"}
+    # duração pelo material: ~1,5 min por capítulo com fonte, entre 8 e 12 min
+    out["minutes"] = max(8, min(12, int(data.get("minutes") or 10), round(len(chapters) * 1.5)))
+    out["viable"] = True
+    return out
+
+
+def _research(ch, title: str, text: str) -> list[dict[str, Any]]:
+    """Fontes para o longo: o título do Short costuma ser chamariz ("Onde estão todos?") — a IA diz o nome real do assunto
+    ("Paradoxo de Fermi") e 2 buscas complementares; junta tudo sem repetir."""
+    from concurrent.futures import ThreadPoolExecutor
+    from . import research
+    queries = [title]
+    try:
+        data = llm.complete_json(f"""Short de um canal sobre {ch.niche}: "{title}".
+Narração: {text[:900] or '(indisponível)'}
+Qual é o ASSUNTO REAL do Short, com o nome pelo qual aparece em enciclopédias e livros? E quais 2 buscas trariam fontes
+confiáveis para APROFUNDAR o assunto (causas, contexto, personagens, consequências)? Buscas curtas, em português.
+Responda JSON: {{"topic": "...", "queries": ["...", "..."]}}""", temperature=0.2)
+        queries = [str(q) for q in [data.get("topic")] + list(data.get("queries") or [])[:2] if q] or queries
+    except Exception as e:  # noqa: BLE001
+        log.info("assunto do Short: %s", e)
+    with ThreadPoolExecutor(3) as ex:
+        found = list(ex.map(lambda q: research.gather_dossier(q, max_sources=4)["sources"], queries))
+    out, seen = [], set()
+    for batch in zip(*[f + [None] * (8 - len(f)) for f in found]):  # intercala: a melhor fonte de cada busca primeiro
+        for x in batch:
+            if x and x["url"] not in seen:
+                seen.add(x["url"])
+                out.append(x)
+    return out[:10]
+
+
+def _outline_text(p: dict[str, Any]) -> str:
+    return "\n".join(f"{i + 1}. {c['title']} — {c['beats']}" for i, c in enumerate(p["chapters"]))
+
+
+def long_from_champion(channel_id: int, key: str, ctx: JobContext | None = None) -> dict[str, Any]:
+    """Short campeão → pauta longa checada e com nota → roteiro longo em capítulos (você revisa antes de renderizar)."""
+    from .models import Channel as _Ch, Idea
+    from .pipeline import _apply_check, _enforce_facts, _score
+    from . import content
+    p = propose_long(channel_id, key, ctx)
+    if not p.get("viable"):
+        raise RuntimeError(f"Tema sem profundidade para 8+ min: {p.get('reason')}")
+    if ctx:
+        ctx.log(f"Proposta: “{p['title']}” · {p['minutes']} min · {len(p['chapters'])} capítulos\n{_outline_text(p)}")
+    with session() as s:
+        ch = s.get(_Ch, channel_id)
+        idea = Idea(channel_id=channel_id, title=p["title"], format="long", origin="champion",
+                    angle=f"{p['angle']}\n\nCAPÍTULOS PLANEJADOS:\n{_outline_text(p)}", summary=p["summary"],
+                    sources=p["sources"], status="approved",
+                    tags=[f"campeao:{key}", f"de_short:{p['short']}"[:120]])
+        s.add(idea)
+        s.commit()
+        s.refresh(idea)
+    if ctx:
+        ctx.update(0.6, "Checando os fatos da pauta")
+    r = content.verify_idea(ch, idea)
+    with session() as s:
+        db = s.get(Idea, idea.id)
+        _apply_check(db, r)
+        s.add(db)
+        s.commit()
+    if _enforce_facts(idea.id, ctx):
+        raise RuntimeError("as fontes não confirmaram a premissa do vídeo longo — pauta descartada")
+    _score(ch, idea.id, ctx)
+    extra = f"""VÍDEO LONGO NASCIDO DE UM SHORT CAMPEÃO ("{p['short']}"): o público já provou interesse; agora entregue PROFUNDIDADE.
+Siga estes capítulos (cada um com os fatos indicados, confirmados nas fontes — nada de enchimento ou repetição):
+{_outline_text(p)}
+Perguntas que o vídeo precisa responder: {'; '.join(p['open_questions']) or '(as do tema)'}
+Gancho sugerido: {p['hook']}
+Ritmo de vídeo longo: no fim de cada capítulo, deixe uma pergunta que o capítulo seguinte responde (segura o público).
+O vídeo termina com uma TELA FINAL de 20 s: o CTA convida a assistir o próximo vídeo que aparece na tela e a se inscrever."""
+    j = enqueue("write_script", title=f"Roteiro longo (Short campeão): {p['title']}", channel_id=channel_id, ref_id=idea.id,
+                payload={"format": "long", "extra": extra,
+                         "plan_extra": {"seconds": p["minutes"] * 60, "from_short": p["short_url"],
+                                        "from_short_ext": p["short_ext"], "from_short_title": p["short"]}})
+    if ctx:
+        ctx.log(f"Roteiro longo na fila (tarefa #{j.id}) — revise em Roteiros antes de gerar o vídeo")
+    return {"idea_id": idea.id, "write_job": j.id, "title": p["title"], "minutes": p["minutes"], "chapters": p["chapters"]}
+
+
+@handler("champion_long")
+def job_champion_long(ctx: JobContext) -> dict:
+    return long_from_champion(ctx.channel_id, str(ctx.payload.get("key")), ctx)
+
+
+# ================================================================ séries: maratona entre episódios
+
+def series_episodes(channel_id: int, series: str) -> list[Publication]:
+    """Vídeos LONGOS publicados da série, do mais antigo para o mais novo."""
+    if not series:
+        return []
+    out = []
+    with session() as s:
+        for p in s.exec(select(Publication).where(Publication.channel_id == channel_id, Publication.platform == "youtube",
+                                                  Publication.status == "published")).all():
+            v = s.get(Video, p.video_id) if p.video_id else None
+            sc = s.get(Script, v.script_id) if v else None
+            if v and v.format == "long" and sc and (sc.variety or {}).get("series") == series and p.url:
+                out.append(p)
+    return sorted(out, key=_when)
+
+
+def _when(p: Publication):
+    return (p.published_at or p.created_at).replace(tzinfo=None)
+
+
+def playlist_url(channel_id: int, series: str) -> str:
+    from .models import Channel as _Ch
+    with session() as s:
+        pid = ((s.get(_Ch, channel_id).playlists or {}).get(series)) if series else None
+    return f"https://www.youtube.com/playlist?list={pid}" if pid else ""
+
+
+def series_block(sc: Script, video: Video) -> str:
+    """Linhas de maratona na descrição de um vídeo longo: episódio anterior + playlist da série (+ o Short de origem)."""
+    if video.format != "long":
+        return ""
+    var = sc.variety or {}
+    series, lines = var.get("series") or "", []
+    if series:
+        prev = [p for p in series_episodes(sc.channel_id, series) if p.video_id != video.id]
+        if prev:
+            lines.append(f"◀ Episódio anterior: {prev[-1].title.strip()} → {prev[-1].url}")
+        pl = playlist_url(sc.channel_id, series)
+        if pl:
+            lines.append(f"▶ Maratone a série “{series}”: {pl}")
+    if var.get("from_short"):
+        lines.append(f"⚡ A versão de 1 minuto (Short): {var['from_short']}")
+    return "\n".join(lines)
+
+
+_NEXT_RE = re.compile(r"^▶ Próximo episódio:.*$\n?", re.M)
+_PL_RE = re.compile(r"^▶ Maratone a série.*$", re.M)
+_FULL_RE = re.compile(r"^▶ Vídeo completo:.*$\n?", re.M)
+
+
+def _insert_after_first(desc: str, line: str) -> str:
+    parts = desc.strip().split("\n\n", 1)
+    return parts[0] + "\n\n" + line + ("\n\n" + parts[1] if len(parts) > 1 else "")
+
+
+def _update_desc(yt, video_ext: str, fn) -> bool:
+    item = (yt.videos().list(part="snippet", id=video_ext).execute().get("items") or [None])[0]
+    if not item:
+        return False
+    sn = item["snippet"]
+    old = sn.get("description", "")
+    new = fn(old)
+    if new.strip() == old.strip():
+        return False
+    body = {"id": video_ext, "snippet": {"title": sn["title"], "categoryId": sn.get("categoryId", "27"),
+                                         "description": new[:4900], "tags": sn.get("tags", []),
+                                         "defaultLanguage": sn.get("defaultLanguage", "pt-BR")}}
+    yt.videos().update(part="snippet", body=body).execute()
+    return True
+
+
+def binge_links(pub_id: int, ctx: JobContext | None = None) -> int:
+    """Depois de publicar um longo: o episódio anterior ganha "▶ Próximo episódio" na descrição, o novo ganha o link
+    da playlist (se a série acabou de nascer) e o Short campeão de origem ganha "▶ Vídeo completo" no topo."""
+    from .community import _account
+    from .publish import _yt_client, _yt_creds
+    with session() as s:
+        pub = s.get(Publication, pub_id)
+        video = s.get(Video, pub.video_id) if pub and pub.video_id else None
+        sc = s.get(Script, video.script_id) if video else None
+    if not pub or not video or not sc or video.format != "long" or not pub.external_id:
+        return 0
+    acc = _account(pub.channel_id)
+    if not acc or not acc.credentials:
+        return 0
+    yt = _yt_client(_yt_creds(acc))
+    log = ctx.log if ctx else (lambda m: None)
+    series, title, done = (sc.variety or {}).get("series") or "", pub.title.strip(), 0
+    if series:
+        prev = [p for p in series_episodes(pub.channel_id, series) if p.id != pub.id and _when(p) <= _when(pub)]
+        if prev and prev[-1].external_id:
+            line = f"▶ Próximo episódio: {title} → {pub.url}"
+            if _update_desc(yt, prev[-1].external_id, lambda d: _insert_after_first(_NEXT_RE.sub("", d), line)):
+                done += 1
+                log(f"Episódio anterior agora aponta para este: {prev[-1].title[:60]}")
+        pl = playlist_url(pub.channel_id, series)
+        if pl:  # série que nasceu agora: a playlist só existe depois do envio
+            line = f"▶ Maratone a série “{series}”: {pl}"
+            if _update_desc(yt, pub.external_id, lambda d: d if _PL_RE.search(d) else _insert_after_first(d, line)):
+                done += 1
+                log("Link da playlist da série incluído na descrição")
+    src = (sc.variety or {}).get("from_short_ext")
+    if src:  # o Short campeão leva ao vídeo completo ("vídeo relacionado" do Shorts só dá para escolher no Studio)
+        line = f"▶ Vídeo completo: {title} → {pub.url}"
+        try:
+            if _update_desc(yt, src, lambda d: line + "\n\n" + _FULL_RE.sub("", d).strip()):
+                done += 1
+                log("Short de origem agora leva ao vídeo completo (descrição)")
+        except Exception as e:  # noqa: BLE001 — Short importado de outra conta etc.
+            log(f"Descrição do Short de origem não atualizada: {e}")
+    return done
+
+
+@handler("binge_links")
+def job_binge_links(ctx: JobContext) -> dict:
+    return {"updated": binge_links(ctx.ref_id, ctx)}

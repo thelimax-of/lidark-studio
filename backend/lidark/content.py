@@ -255,6 +255,12 @@ def write_script(ch: Channel, idea: Idea, fmt: str | None = None, extra: str = "
         nxt = variety.next_idea(ch, idea.id, fmt)
         if nxt:
             plan = {**plan, "next_idea": nxt.id, "next_title": nxt.title}
+    mins = next((str(t)[8:] for t in idea.tags or [] if str(t).startswith("minutos:")), "")
+    if fmt == "long" and mins and not plan.get("seconds"):  # duração pedida na pauta (ex.: revisão ENEM de 10 min)
+        try:
+            plan = {**plan, "seconds": int(float(mins) * 60)}
+        except ValueError:
+            pass
     seconds = plan.get("seconds") or ((ch.short_seconds or 45) if fmt == "short" else ch.long_minutes * 60)
     words = target_words(ch, fmt, plan.get("seconds"))
     dossier = research.gather_dossier(idea.title, max_sources=5)
@@ -286,7 +292,7 @@ FONTES DE PESQUISA:
 {('INSTRUÇÕES EXTRAS: ' + extra) if extra else ''}
 
 Escreva o roteiro de um vídeo {'CURTO VERTICAL' if fmt == 'short' else 'LONGO HORIZONTAL'} com NO MÍNIMO {words} palavras de narração no total (≈{seconds}s) — conte as palavras; roteiro curto é reprovado.
-Use {f'{max(6, int(seconds) // 5)} a {max(6, int(seconds) // 5) + 3}' if fmt == 'short' else '25 a 40'} cenas.{' Short enxuto: sem enrolação nem cena de preenchimento — cada frase precisa segurar o público até o fim.' if fmt == 'short' else ''}
+Use {f'{max(6, int(seconds) // 5)} a {max(6, int(seconds) // 5) + 3}' if fmt == 'short' else f'{max(25, int(seconds) // 15)} a {max(40, int(seconds) // 9)}'} cenas.{' Short enxuto: sem enrolação nem cena de preenchimento — cada frase precisa segurar o público até o fim.' if fmt == 'short' else ''}
 REGRAS:
 - Primeira frase = GANCHO brutal no estilo pedido em VARIEDADE, sem "Olá", sem "Você sabia" genérico.
 - Frases curtas, linguagem falada brasileira, ritmo acelerado, um fato surpreendente a cada ~10s.

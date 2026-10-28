@@ -296,6 +296,11 @@ def _description(desc: str, sc: Script, video: Video, hashtags: str) -> str:
     parts = [desc.strip()]
     if (sc.variety or {}).get("from_long"):
         parts.insert(0, f"▶ Vídeo completo: {sc.variety['from_long']}")
+    try:  # vídeo longo: episódio anterior + playlist da série (maratona) + o Short de origem
+        from .longform import series_block
+        parts.append(series_block(sc, video))
+    except Exception as e:  # noqa: BLE001
+        log.warning("links da série: %s", e)
     chapters = (video.assets or {}).get("chapters") or []
     if len(chapters) >= 3:
         fmt = lambda x: f"{int(x // 3600)}:{int(x % 3600 // 60):02d}:{int(x % 60):02d}" if x >= 3600 else f"{int(x // 60)}:{int(x % 60):02d}"  # noqa: E731
@@ -373,7 +378,11 @@ def job_publish(ctx: JobContext) -> dict:
     if acc.platform == "youtube":
         from .community import after_publish
         after_publish(pub.id, pub.channel_id)
-        if video.format == "long" and not (sc.variety or {}).get("from_long"):
+        if video.format == "long":  # maratona: episódio anterior → este, playlist e o Short campeão de origem → este
+            from .jobs import enqueue as _enq
+            _enq("binge_links", title=f"Links da série: {pub.title[:60]}", channel_id=pub.channel_id, ref_id=pub.id)
+        from .focus import paused
+        if video.format == "long" and not (sc.variety or {}).get("from_long") and not paused(pub.channel_id):
             from .jobs import enqueue
             enqueue("shorts_from_long", title=f"Shorts a partir do longo: {pub.title[:60]}", channel_id=pub.channel_id,
                     ref_id=video.id)

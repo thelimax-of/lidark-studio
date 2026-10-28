@@ -8,7 +8,6 @@ surpresa (olhos arregalados + boca "O" + pulo), feliz (olhos ^^), aceno.
 from __future__ import annotations
 
 import math
-from functools import lru_cache
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -58,6 +57,12 @@ def plan_mouth(envelope: np.ndarray, fps: int) -> np.ndarray:
     return out
 
 
+def _crop(img: Image.Image) -> tuple[Image.Image | None, tuple[int, int]]:
+    """Recorta a camada na área com pixels visíveis (fora dela é tudo transparente)."""
+    box = img.getbbox()
+    return (img.crop(box), box[:2]) if box else (None, (0, 0))
+
+
 class ClockMascot:
     def __init__(self, radius: int = 230, seed: int = 0):
         self.R = radius
@@ -72,6 +77,11 @@ class ClockMascot:
         self.shoulder = 0.9     # distância dos ombros (fração de R)
         self._configure()
         self._static = self._draw_static()
+        # só a área desenhada de cada camada é guardada/composta: o resto do quadro do mascote é transparente
+        box = self._static.getbbox() or (0, 0, 1, 1)
+        self._static_c, self._static_xy = self._static.crop(box), box[:2]
+        self._face_cache: dict = {}
+        self._arm_cache: dict = {}
         # piscadas em tempos irregulares + algumas piscadelas
         self.blinks: list[tuple[float, str]] = []
         t = 0.8
@@ -120,8 +130,18 @@ class ClockMascot:
 
     # ================================================================ rosto
 
-    @lru_cache(maxsize=512)
-    def _face(self, mouth: int, eyes: str, hand_q: int) -> Image.Image:
+    def _face(self, mouth: int, eyes: str, hand_q: int) -> tuple[Image.Image | None, tuple[int, int]]:
+        """Rosto recortado na área desenhada (+ posição), em cache por instância."""
+        key = (mouth, eyes, hand_q)
+        hit = self._face_cache.get(key)
+        if hit is None:
+            hit = _crop(self._draw_face(mouth, eyes, hand_q))
+            if len(self._face_cache) >= 256:
+                self._face_cache.pop(next(iter(self._face_cache)))
+            self._face_cache[key] = hit
+        return hit
+
+    def _draw_face(self, mouth: int, eyes: str, hand_q: int) -> Image.Image:
         R, s = self.R * SS * self.face_scale, SS
         cx, cy = self.cx * s, (self.cy + self.face_dy * self.R) * s
         img = Image.new("RGBA", (self.w * s, self.h * s), (0, 0, 0, 0))
@@ -172,14 +192,25 @@ class ClockMascot:
 
     # ================================================================ braços
 
-    @lru_cache(maxsize=1024)
-    def _arms(self, right: int, left: int) -> Image.Image:
+    def _arm(self, side: int, ang: int) -> tuple[Image.Image | None, tuple[int, int]]:
+        """Um braço recortado (+ posição), em cache por instância. Os dois braços nunca se tocam, então desenhar
+        cada um à parte dá exatamente os mesmos pixels — e o cache fica pequeno (≈70 imagens em vez de milhares)."""
+        key = (side, ang)
+        hit = self._arm_cache.get(key)
+        if hit is None:
+            hit = _crop(self._draw_arms(((side, ang),)))
+            if len(self._arm_cache) >= 256:
+                self._arm_cache.pop(next(iter(self._arm_cache)))
+            self._arm_cache[key] = hit
+        return hit
+
+    def _draw_arms(self, arms) -> Image.Image:
         R, s = self.R * SS, SS
         cx, cy = self.cx * s, self.cy * s
         img = Image.new("RGBA", (self.w * s, self.h * s), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
         lw = int(R * 0.034)
-        for side, ang in ((1, right), (-1, left)):
+        for side, ang in arms:
             sx, sy = cx + side * R * self.shoulder, cy + R * 0.18
             L = R * 0.95
             a = math.radians(ang)
@@ -229,15 +260,25 @@ class ClockMascot:
             right += 25 * mood_k
             left += 70 * mood_k
         out = Image.new("RGBA", (self.w, self.h), (0, 0, 0, 0))
-        arms = self._arms(int(round(right / 2) * 2), int(round(left / 2) * 2))
+        # camadas recortadas na área desenhada: mesmos pixels de compor as imagens inteiras, bem mais rápido
+        layers = [self._arm(1, int(round(right / 2) * 2)), self._arm(-1, int(round(left / 2) * 2))]
         if mirror:  # só os braços viram (o mostrador continua legível)
-            arms = arms.transpose(Image.FLIP_LEFT_RIGHT)
-        out.alpha_composite(arms)
-        out.alpha_composite(self._static)
-        out.alpha_composite(self._face(int(mouth), eyes, hand_q))
+            layers = [(im.transpose(Image.FLIP_LEFT_RIGHT), (self.w - x - im.width, y)) for im, (x, y) in layers if im]
+        layers += [(self._static_c, self._static_xy), self._face(int(mouth), eyes, hand_q)]
+        x0, y0, x1, y1 = self.w, self.h, 0, 0
+        for im, (x, y) in layers:
+            if im is not None:
+                out.alpha_composite(im, (x, y))
+                x0, y0, x1, y1 = min(x0, x), min(y0, y), max(x1, x + im.width), max(y1, y + im.height)
         tilt = 2.2 * math.sin(t * 1.15) + (4 * math.sin(t * 20) * mood_k if mood == "surprise" else 0)
-        if abs(tilt) > 0.15:
-            out = out.rotate(tilt, resample=Image.BICUBIC, center=(self.cx, self.cy))
+        if abs(tilt) > 0.15 and x1 > x0:
+            # gira só a área desenhada (+ margem que cobre o deslocamento da rotação e o filtro bicúbico)
+            far = max(math.hypot(px - self.cx, py - self.cy) for px in (x0, x1) for py in (y0, y1))
+            m = int(far * math.radians(abs(tilt))) + 4
+            box = (max(0, x0 - m), max(0, y0 - m), min(self.w, x1 + m), min(self.h, y1 + m))
+            part = out.crop(box).rotate(tilt, resample=Image.BICUBIC, center=(self.cx - box[0], self.cy - box[1]))
+            out = Image.new("RGBA", (self.w, self.h), (0, 0, 0, 0))
+            out.paste(part, box[:2])
         dy = math.sin(t * 2 * math.pi * 0.85) * self.R * 0.022 - talk * self.R * 0.02
         if mood == "surprise":
             dy -= self.R * 0.18 * math.sin(math.pi * min(1.0, mood_k))

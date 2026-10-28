@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import functools
+import logging
 import math
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,6 +16,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from ..media import ffmpeg_exe, video_encoder_args
 
 FONTS = Path(__file__).resolve().parents[2] / "assets" / "fonts"
+log = logging.getLogger("lidark.render")
 
 
 # ================================================================ dados da linha do tempo
@@ -56,6 +59,13 @@ class Clip:
         self._i = -1
         self._cur: Image.Image | None = None
         self.size = (0, 0)
+
+    def __getstate__(self) -> dict:
+        # vai para os processos do render paralelo: o leitor de quadros é reaberto lá
+        return {"path": self.path, "fps": self.fps}
+
+    def __setstate__(self, st: dict) -> None:
+        self.__init__(st["path"], st["fps"])
 
     def _open(self) -> None:
         import imageio_ffmpeg
@@ -249,22 +259,26 @@ def ellipsize(f: ImageFont.FreeTypeFont, text: str, max_w: float) -> str:
 # ================================================================ codificação
 
 class FrameWriter:
-    """Envia quadros RGB para o FFmpeg (NVENC quando disponível) e já mistura o áudio final."""
+    """Envia quadros RGB para o FFmpeg (NVENC quando disponível); no fim junta o áudio final.
+
+    O vídeo é codificado sozinho e o áudio entra numa 2ª passada rápida (-c:v copy, mesmo vídeo bit a bit): com o
+    áudio na mesma passada (-shortest) o FFmpeg acumulava ~1 GB de RAM ao longo de um Short de 70 s."""
 
     def __init__(self, out: Path, w: int, h: int, fps: int, audio: Path | None):
+        self.out, self.audio, self.fps = out, audio, fps
+        self.video = out.with_name(out.stem + "_video" + out.suffix) if audio else out
         args = [ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-y",
                 "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(fps), "-i", "-"]
-        if audio:
-            args += ["-i", str(audio)]
         args += video_encoder_args()
-        if audio:
-            args += ["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-map", "0:v", "-map", "1:a", "-shortest"]
-        args += ["-movflags", "+faststart", "-r", str(fps), str(out)]
+        args += ["-movflags", "+faststart", "-r", str(fps), str(self.video)]
         self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
 
     def write(self, frame: Image.Image) -> None:
+        self.write_bytes(frame.tobytes())
+
+    def write_bytes(self, data: bytes | bytearray | memoryview) -> None:
         assert self.proc.stdin
-        self.proc.stdin.write(frame.tobytes())
+        self.proc.stdin.write(data)
 
     def close(self) -> None:
         assert self.proc.stdin
@@ -272,21 +286,181 @@ class FrameWriter:
         err = self.proc.stderr.read().decode(errors="ignore") if self.proc.stderr else ""
         if self.proc.wait() != 0:
             raise RuntimeError("FFmpeg falhou ao codificar: " + err[-1500:])
+        if self.audio:
+            from ..media import run_ffmpeg
+            try:
+                run_ffmpeg(["-i", str(self.video), "-i", str(self.audio), "-map", "0:v", "-map", "1:a", "-c:v", "copy",
+                            "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-shortest", "-movflags", "+faststart",
+                            str(self.out)])
+            finally:
+                self.video.unlink(missing_ok=True)
+
+
+def render_frame(tl: Timeline, template: Any, i: int) -> Image.Image:
+    """Quadro i pronto para o encoder: RGB, já com o look (cor/granulado) do vídeo."""
+    frame = template.frame(i / tl.fps, i)
+    look = getattr(template, "look", None)
+    if look is not None and look.active:
+        frame = look.apply(frame, i)
+    return frame.convert("RGB") if frame.mode != "RGB" else frame
 
 
 def render(tl: Timeline, template: Any, out: Path, audio: Path | None,
            progress: Callable[[float], None] | None = None) -> None:
+    """Desenha todos os quadros e codifica. Com núcleos e memória livres, os quadros são desenhados em processos
+    paralelos (mesmos pixels e mesmo encoder: o arquivo final é igual ao do render em série)."""
     n = int(math.ceil(tl.duration * tl.fps))
-    w = FrameWriter(out, tl.width, tl.height, tl.fps, audio)
     try:
+        workers = render_workers(n)
+        if workers > 1:
+            try:
+                _render_parallel(tl, template, out, audio, progress, n, workers)
+                return
+            except Exception as e:  # noqa: BLE001 — Cancelled (BaseException) passa direto
+                log.warning("render paralelo falhou (%s) — refazendo em um processo só", e)
+        w = FrameWriter(out, tl.width, tl.height, tl.fps, audio)
+        try:
+            for i in range(n):
+                w.write(render_frame(tl, template, i))
+                if progress and i % 15 == 0:
+                    progress(i / n)
+        finally:
+            w.close()
+    finally:
+        _clear_caches(template)
+
+
+# ================================================================ render paralelo
+
+CHUNK = 8  # quadros seguidos por processo (o processo k desenha os trechos k, k+N, k+2N...)
+AHEAD = 12  # quadros prontos que cada processo pode deixar na fila enquanto espera a vez
+WORKER_MB = 450  # memória medida de cada processo (~300 MB: fotos das cenas + caches) + folga
+
+
+def free_ram_mb() -> float | None:
+    """Memória física disponível agora (MB)."""
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            class _MS(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            m = _MS()
+            m.dwLength = ctypes.sizeof(_MS)
+            if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):
+                return None
+            return m.ullAvailPhys / 2 ** 20
+        return os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / 2 ** 20
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def render_workers(n: int) -> int:
+    """Quantos processos usar: config "render_workers" (0 = automático), limitado pelos núcleos e pela RAM livre."""
+    from .. import config
+    try:
+        want = int(config.get("render_workers") or 0)
+    except (TypeError, ValueError):
+        want = 0
+    if want == 1 or n < 90:
+        return 1
+    limit = want if want > 1 else max(1, min(6, (os.cpu_count() or 2) // 2))
+    free = free_ram_mb()
+    if free is not None:  # nunca troca RAM por memória virtual: com a RAM cheia o render fica MAIS lento
+        limit = min(limit, int((free - 900) // WORKER_MB))
+    return max(1, limit)
+
+
+def _render_parallel(tl: Timeline, template: Any, out: Path, audio: Path | None,
+                     progress: Callable[[float], None] | None, n: int, workers: int) -> None:
+    """Processos auxiliares (lidark.render.worker) desenham trechos intercalados; este processo só lê os quadros
+    na ordem e manda para um único FFmpeg."""
+    import pickle
+    import shutil
+    import sys
+
+    tmp = out.with_name(out.stem + "_render")
+    tmp.mkdir(parents=True, exist_ok=True)
+    job = tmp / "timeline.pkl"
+    cls = type(template)
+    with open(job, "wb") as f:
+        pickle.dump({"tl": tl, "module": cls.__module__, "cls": cls.__qualname__, "setup": hasattr(template, "plans"),
+                     "n": n, "chunk": CHUNK, "workers": workers, "ahead": AHEAD}, f, protocol=pickle.HIGHEST_PROTOCOL)
+    backend = Path(__file__).resolve().parents[2]
+    exe = Path(sys.executable)
+    if exe.name.lower() == "pythonw.exe" and exe.with_name("python.exe").exists():
+        exe = exe.with_name("python.exe")
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(x for x in (str(backend), os.environ.get("PYTHONPATH", "")) if x),
+           # 1 thread no BLAS do numpy: senão cada processo reserva ~350 MB só ao importar o numpy (buffers por núcleo)
+           "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
+    # sem janela e com prioridade baixa: o computador continua usável enquanto renderiza
+    flags = (subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS) if os.name == "nt" else 0
+    procs: list[subprocess.Popen] = []
+    logs: list[Any] = []
+    w: FrameWriter | None = None
+
+    def tail(k: int) -> str:
+        try:
+            logs[k].flush()
+            logs[k].seek(0)
+            return logs[k].read().decode(errors="ignore")[-1200:]
+        except Exception:  # noqa: BLE001
+            return ""
+
+    try:
+        for k in range(workers):
+            logs.append(open(tmp / f"worker{k}.log", "w+b"))
+            procs.append(subprocess.Popen([str(exe), "-m", "lidark.render.worker", str(job), str(k)], cwd=str(backend),
+                                          env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=logs[k],
+                                          creationflags=flags))
+        w = FrameWriter(out, tl.width, tl.height, tl.fps, audio)
+        size = tl.width * tl.height * 3
+        buf = memoryview(bytearray(size))
         for i in range(n):
-            t = i / tl.fps
-            frame = template.frame(t, i)
-            look = getattr(template, "look", None)
-            if look is not None and look.active:
-                frame = look.apply(frame, i)
-            w.write(frame.convert("RGB") if frame.mode != "RGB" else frame)
+            k = (i // CHUNK) % workers
+            src = procs[k].stdout
+            got = 0
+            while got < size:
+                r = src.readinto(buf[got:])  # type: ignore[union-attr]
+                if not r:
+                    try:
+                        procs[k].wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    raise RuntimeError(f"processo {k} do render parou no quadro {i}: {tail(k)}")
+                got += r
+            w.write_bytes(buf)
             if progress and i % 15 == 0:
                 progress(i / n)
+        for k, p in enumerate(procs):
+            if p.wait(timeout=60) != 0:
+                raise RuntimeError(f"processo {k} do render terminou com erro: {tail(k)}")
     finally:
-        w.close()
+        for p in procs:
+            if p.poll() is None:
+                p.kill()
+            if p.stdout:
+                p.stdout.close()  # se sobrar algum processo, ele sai sozinho ao tentar escrever
+        try:
+            if w is not None:
+                w.close()
+        finally:
+            for lg in logs:
+                lg.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _clear_caches(template: Any) -> None:
+    """Os caches de método (lru_cache) ficam na classe e seguram o template — e as fotos do vídeo — na memória do
+    servidor depois do render; limpa ao terminar."""
+    for klass in type(template).__mro__:
+        for v in vars(klass).values():
+            if hasattr(v, "cache_clear"):
+                try:
+                    v.cache_clear()
+                except Exception:  # noqa: BLE001
+                    pass

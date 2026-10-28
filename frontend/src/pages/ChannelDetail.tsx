@@ -9,6 +9,7 @@ import { api, invalidate, onJob, useApi, type Channel } from '../api'
 import { act, ago, fmtNum, toast } from '../ui'
 import { Avatar, ChannelState, connectYoutube } from './Channels'
 import CampaignsSection from './Campaigns'
+import FocusCard from './FocusMode'
 
 type Ch = Channel & { connected?: boolean }
 
@@ -78,6 +79,9 @@ export default function ChannelDetail() {
           </div>
         )}
       </div>
+
+      {/* modo foco: quanto o piloto produz aqui + sugestão pelos dados */}
+      <div className="mb-6"><FocusCard channelId={f.id} /></div>
 
       <div className="grid xl:grid-cols-[1fr_360px] gap-6 items-start">
         <div className="space-y-6">
@@ -181,6 +185,10 @@ export default function ChannelDetail() {
               <span className="font-semibold w-8">{f.min_score_to_produce}</span>
             </div>
             <ScheduleBox f={f} set={set} />
+            <div className="flex flex-wrap items-center gap-3 mt-4 pt-4 border-t border-line2">
+              <Toggle on={!f.seed_comment_off} label="Comentário do canal" onClick={() => set({ seed_comment_off: !f.seed_comment_off })} />
+              <span className="text-sm text-muted flex-1 min-w-60">Minutos depois de cada vídeo ir ao ar, o canal deixa um comentário que puxa conversa (pergunta, "A ou B?", próximo tema). Você fixa pela tela Comentários.</span>
+            </div>
           </Section>
 
           <details className="card group">

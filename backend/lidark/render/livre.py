@@ -563,6 +563,8 @@ class LivreTemplate(OuroTemplate):
         tl, k = self.tl, self.k
         if not hasattr(self, "plans"):
             self._setup_direction()
+        if self._end_card(t):  # vídeo longo: tela final de 20 s (herdada do Ouro)
+            return self._end_card(t).frame(t, i)
         in_outro = t >= tl.narration_end + 0.15
         sc = tl.scene_at(min(t, tl.narration_end - 0.01))
         local = t - sc.start

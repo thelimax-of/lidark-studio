@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Area, AreaChart, CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { BarChart3, Sparkles, ExternalLink, ArrowUpDown, RefreshCw } from 'lucide-react'
+import { BarChart3, Sparkles, ExternalLink, ArrowUpDown, RefreshCw, Film } from 'lucide-react'
 import { api, invalidate, onJob, useApi, type Job } from '../api'
 import { act, ChannelScope, ChannelTag, Empty, fmtNum, PageHeader, toast, useChannel, useScope } from '../ui'
 import { ExperimentsCard, YppCard } from './Growth'
 import type { Overview } from './Overview'
+import { ChampionsCard, toLong } from './Champions'
 
 type Row = {
   video_id: string | number; title: string; views: number; likes: number; comments: number; shares: number
@@ -93,6 +94,8 @@ export default function Metrics() {
 
       {cid && <RetentionCard cid={cid} />}
 
+      <div className="mb-6"><ChampionsCard channelId={cid} /></div>
+
       <div className={`grid gap-6 items-start ${all ? '' : 'xl:grid-cols-[1fr_340px]'}`}>
         <div className="card overflow-hidden">
           <div className="px-5 py-4 flex items-center justify-between">
@@ -122,7 +125,9 @@ export default function Metrics() {
                           <div className="truncate max-w-80 font-medium">{r.title.replace(/#Shorts/i, '').trim()}</div>
                           <div className="text-xs text-muted flex items-center gap-1.5">{all && r.channel_id != null && <ChannelTag id={r.channel_id} />}{r.published_at ? new Date(r.published_at).toLocaleDateString('pt-BR') : ''}{r.duration ? ` · ${Math.round(r.duration)}s` : ''}</div>
                         </div>
-                        {r.url && <a href={r.url} target="_blank" rel="noreferrer" className="text-muted hover:text-text ml-auto"><ExternalLink size={14} /></a>}
+                        {r.url?.includes('/shorts/') && (r.channel_id ?? cid) != null && <button className="btn btn-sm btn-icon btn-ghost ml-auto shrink-0" title="Transformar em vídeo longo (8-12 min, com fontes)"
+                          onClick={() => toLong((r.channel_id ?? cid)!, String(r.video_id), r.title.replace(/#Shorts/i, '').trim())}><Film size={14} /></button>}
+                        {r.url && <a href={r.url} target="_blank" rel="noreferrer" className={`text-muted hover:text-text ${r.url.includes('/shorts/') ? '' : 'ml-auto'}`}><ExternalLink size={14} /></a>}
                       </div>
                     </td>
                     <td className="text-right px-3 tabular-nums">{fmtNum(r.views)}</td>

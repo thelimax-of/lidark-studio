@@ -120,7 +120,9 @@ def inspect(ch: Channel, sc: Script, video: Video) -> dict[str, Any]:
                          f"{dur:.0f}s (mínimo {need:.0f}s)"))
     # 2) encerramento
     tail = dur - narr if narr else 0
-    checks.append(_check("Encerramento", "ok" if tail <= OUTRO_SECONDS + 3.3 else "fail",
+    # vídeo longo: tela final de 20 s para os elementos finais do YouTube (render/endcard.py) é esperada
+    max_tail = OUTRO_SECONDS + 3.3 if vertical else 20.0 + 1.0
+    checks.append(_check("Encerramento", "ok" if tail <= max_tail else "fail",
                          f"tela final com {tail:.1f}s"))
     # 3) final do roteiro
     last = ((sc.scenes or [{}])[-1].get("text") or "").strip()

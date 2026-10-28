@@ -78,14 +78,17 @@ def autopilot_tick() -> None:
     local_now = datetime.now()
     with session() as s:
         chans = s.exec(select(Channel).where(Channel.auto_pilot == True)).all()  # noqa: E712
-    from . import posting_times
+    from . import focus, posting_times
     for ch in chans:
+        if focus.paused(ch):  # modo foco "Pausado": nada novo (agendados saem por due_publications)
+            continue
         auto = posting_times.settings(ch)["mode"] == "auto"
         try:
             slots = posting_times.auto_slots(ch) if auto else (ch.posting_slots or [])
         except Exception as e:  # noqa: BLE001
             log.warning("horários automáticos falharam (%s): usando os fixos", e)
             slots = ch.posting_slots or []
+        slots = focus.filter_slots(ch, slots, auto)  # "Reduzido" com horários fixos: metade dos Shorts
         for slot in slots:
             parsed = parse_slot(slot)
             if not parsed:
@@ -120,15 +123,19 @@ def autopilot_tick() -> None:
 
 
 def keep_ideas_stocked() -> None:
+    from . import focus
     with session() as s:
         chans = s.exec(select(Channel).where(Channel.auto_pilot == True)).all()  # noqa: E712
         for ch in chans:
+            if focus.paused(ch):
+                continue
+            stock_min, batch = focus.ideas_stock(ch)  # Foco guarda mais pautas, Reduzido menos
             n = s.exec(select(func.count()).select_from(Idea).where(
                 Idea.channel_id == ch.id, Idea.status.in_(["new", "approved"]))).one()
             busy = s.exec(select(func.count()).select_from(Job).where(
                 Job.channel_id == ch.id, Job.kind == "discover_ideas", Job.status.in_(["queued", "running"]))).one()
-            if n < 6 and not busy:
-                enqueue("discover_ideas", title=f"Repor pautas: {ch.name}", channel_id=ch.id, payload={"count": 8})
+            if n < stock_min and not busy:
+                enqueue("discover_ideas", title=f"Repor pautas: {ch.name}", channel_id=ch.id, payload={"count": batch})
             from .growth import active_campaign, campaign_tag
             camp = active_campaign(ch)
             if camp and not busy:
@@ -172,8 +179,12 @@ def trend_radar_all() -> None:
         return
     with session() as s:
         ids = {a.channel_id for a in s.exec(select(Account).where(Account.platform == "youtube")).all() if a.credentials}
-        names = {c.id: c.name for c in s.exec(select(Channel)).all()}
+        chans = {c.id: c for c in s.exec(select(Channel)).all()}
+        names = {cid: c.name for cid, c in chans.items()}
+    from .focus import radar_today
     for cid in ids:
+        if cid in chans and not radar_today(chans[cid]):  # Pausado: sem radar · Reduzido: a cada 3 dias
+            continue
         enqueue("trend_radar", title=f"Radar de tendências: {names.get(cid, cid)}", channel_id=cid)
 
 
