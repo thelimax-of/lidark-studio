@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import clsx from 'clsx'
 import { ArrowLeft, Check, Copy, Download, Loader2, RefreshCw, Sparkles, Trash2, Wand2 } from 'lucide-react'
 import { api, invalidate, onJob, useApi, type Channel } from '../api'
-import { act, Field, PageHeader, toast } from '../ui'
+import { act, Field, PageHeader, Skeleton, toast } from '../ui'
 import { connectYoutube } from './Channels'
 
 type Option = { name: string; handle: string; tagline: string; kit: { avatar: string; banner: string; watermark: string; sheet: string } }
@@ -16,7 +16,7 @@ type Draft = {
 const v = () => `?v=${Date.now() >> 12}`
 
 export default function NewChannel() {
-  const { data: drafts = [], refetch } = useApi<Draft[]>('/brand-drafts')
+  const { data: drafts = [], refetch, isLoading } = useApi<Draft[]>('/brand-drafts')
   const [sel, setSel] = useState<number | null>(null)
   const current = drafts.find(d => d.id === sel) ?? null
   useEffect(() => onJob(j => {
@@ -28,22 +28,23 @@ export default function NewChannel() {
 
   return (
     <>
-      <Link to="/canais" className="text-sm text-muted hover:text-text flex items-center gap-1 mb-4"><ArrowLeft size={15} /> Canais</Link>
+      <Link to="/canais" className="text-[13px] text-muted hover:text-text inline-flex items-center gap-1 mb-4 transition-colors"><ArrowLeft size={14} /> Canais</Link>
       <PageHeader title="Novo canal" subtitle="Do nicho ao canal pronto: nomes, foto de perfil, capa, marca d'água, bio, palavras-chave e linha editorial. Quando você conectar o canal criado no YouTube, tudo é aplicado e travado." />
       <div className="grid lg:grid-cols-[280px_1fr] gap-6 items-start">
         <div className="space-y-3">
           <StartForm onCreated={id => { setSel(id); refetch() }} />
-          {drafts.length > 0 && <div className="label">Planejados</div>}
+          {isLoading && <Skeleton className="h-16" />}
+          {drafts.length > 0 && <div className="label !mt-5">Planejados</div>}
           {drafts.map(d => (
-            <button key={d.id} onClick={() => setSel(d.id)} className={clsx('card w-full text-left p-3 transition', sel === d.id ? 'border-text/50' : 'hover:border-line2')}>
+            <button key={d.id} onClick={() => setSel(d.id)} className={clsx('card w-full text-left p-3 transition-colors', sel === d.id ? 'border-accent/55! bg-accent/[0.06]' : 'hover:border-line3')}>
               <div className="text-[13.5px] font-medium truncate">{d.chosen >= 0 ? d.options[d.chosen]?.name : d.niche}</div>
               <div className="text-[12px] text-muted truncate">{d.niche}</div>
-              <div className="text-[11px] mt-1 text-faint">{{ draft: d.options.length ? 'escolha um nome' : 'gerando propostas…', chosen: 'pronto para conectar', applied: 'aplicado no canal' }[d.status] ?? d.status}</div>
+              <div className={clsx('text-[11px] mt-1', d.status === 'applied' ? 'text-ok' : d.status === 'chosen' ? 'text-accent2' : 'text-faint')}>{{ draft: d.options.length ? 'escolha um nome' : 'gerando propostas…', chosen: 'pronto para conectar', applied: 'aplicado no canal' }[d.status] ?? d.status}</div>
             </button>
           ))}
         </div>
         <div>{current ? <DraftView d={current} refetch={refetch} onDeleted={() => setSel(null)} /> :
-          <div className="card p-8 text-center text-muted text-sm">Descreva o nicho ao lado e a IA monta 3 propostas completas, no estilo das imagens do Sinal do Cosmos.</div>}</div>
+          <div className="card p-10 text-center text-muted text-sm flex flex-col items-center gap-3"><span className="w-11 h-11 rounded-xl bg-accent/10 border border-accent/30 text-accent grid place-items-center"><Sparkles size={18} /></span>Descreva o nicho ao lado e a IA monta 3 propostas completas, no estilo das imagens do Sinal do Cosmos.</div>}</div>
       </div>
     </>
   )
@@ -63,7 +64,7 @@ function StartForm({ onCreated }: { onCreated: (id: number) => void }) {
     <div className="card p-4 space-y-3">
       <Field label="Nicho"><input className="input" value={niche} onChange={e => setNiche(e.target.value)} placeholder="ex.: ciência do dia a dia" /></Field>
       <Field label="Observações (opcional)"><textarea className="input min-h-20 text-sm" value={notes} onChange={e => setNotes(e.target.value)} placeholder="ex.: público jovem, cores escuras, mascote bola" /></Field>
-      <button className="btn btn-primary w-full justify-center" disabled={busy || niche.trim().length < 3} onClick={go}>
+      <button className="btn btn-primary btn-lg w-full" disabled={busy || niche.trim().length < 3} onClick={go}>
         {busy ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />} Criar propostas</button>
     </div>
   )
@@ -88,15 +89,18 @@ function DraftView({ d, refetch, onDeleted }: { d: Draft; refetch: () => void; o
         </div>
       </div>
 
-      {generating && <div className="card p-8 text-center text-sm text-muted flex items-center justify-center gap-2"><Loader2 size={16} className="animate-spin" /> A IA está criando nomes, cores, mascote e desenhando os 3 kits…</div>}
+      {generating && <>
+        <div className="text-sm text-muted flex items-center gap-2"><Loader2 size={15} className="animate-spin text-accent" /> A IA está criando nomes, cores, mascote e desenhando os 3 kits…</div>
+        <div className="grid md:grid-cols-3 gap-4">{[0, 1, 2].map(i => <Skeleton key={i} className="h-64" />)}</div>
+      </>}
 
       {d.options.length > 0 && (
         <div className="grid md:grid-cols-3 gap-4">
           {d.options.map((o, i) => (
-            <div key={i} className={clsx('card overflow-hidden', d.chosen === i && 'border-text/60')}>
-              <a href={o.kit.sheet + v()} target="_blank" rel="noreferrer"><img src={o.kit.banner + v()} className="w-full aspect-video object-cover" alt="" /></a>
+            <div key={i} className={clsx('card card-hover overflow-hidden', d.chosen === i && 'ring-grad border-transparent!')}>
+              <a href={o.kit.sheet + v()} target="_blank" rel="noreferrer"><img src={o.kit.banner + v()} className="w-full aspect-video object-cover hover:opacity-90 transition-opacity" alt="" /></a>
               <div className="p-3 flex gap-3 items-center">
-                <img src={o.kit.avatar + v()} className="w-14 h-14 rounded-full border border-line" alt="" />
+                <img src={o.kit.avatar + v()} className="w-14 h-14 rounded-full border-2 border-line2 shadow-[var(--shadow-md)]" alt="" />
                 <div className="min-w-0">
                   <div className="font-semibold truncate">{o.name}</div>
                   <div className="text-[12px] text-muted truncate">{o.handle}</div>
@@ -115,7 +119,7 @@ function DraftView({ d, refetch, onDeleted }: { d: Draft; refetch: () => void; o
         </div>
       )}
 
-      {writing && <div className="card p-6 text-center text-sm text-muted flex items-center justify-center gap-2"><Loader2 size={16} className="animate-spin" /> Escrevendo bio, palavras-chave, playlists e linha editorial…</div>}
+      {writing && <div className="card p-6 text-center text-sm text-muted flex items-center justify-center gap-2 shimmer"><Loader2 size={16} className="animate-spin text-accent" /> Escrevendo bio, palavras-chave, playlists e linha editorial…</div>}
 
       {d.texts?.bio && (
         <div className="card p-5 space-y-4">
@@ -154,7 +158,7 @@ function DraftView({ d, refetch, onDeleted }: { d: Draft; refetch: () => void; o
         </div>
       )}
       {d.status === 'applied' && d.channel_id && (
-        <div className="card p-4 text-sm flex items-center gap-2"><Check size={15} className="text-ok" /> Aplicado. <Link className="underline" to={`/canais/${d.channel_id}`}>Abrir o canal</Link></div>
+        <div className="card p-4 text-sm flex items-center gap-2 border-ok/30!"><Check size={15} className="text-ok" /> Aplicado. <Link className="btn btn-sm ml-auto" to={`/canais/${d.channel_id}`}>Abrir o canal</Link></div>
       )}
     </div>
   )
@@ -166,7 +170,7 @@ function CopyBlock({ label, text }: { label: string; text: string }) {
     <div>
       <div className="flex items-center justify-between"><div className="label !mb-1">{label}</div>
         <button className="btn btn-sm" onClick={() => navigator.clipboard.writeText(text).then(() => toast.ok('Copiado'))}><Copy size={12} /> Copiar</button></div>
-      <pre className="text-xs whitespace-pre-wrap bg-bg border border-line rounded-lg p-3 text-text/80">{text}</pre>
+      <pre className="text-xs whitespace-pre-wrap bg-bg2 border border-line rounded-[var(--r-md)] p-3 text-text/80 font-mono leading-relaxed">{text}</pre>
     </div>
   )
 }

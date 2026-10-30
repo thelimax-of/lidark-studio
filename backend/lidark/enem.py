@@ -228,6 +228,8 @@ LONGS: list[dict[str, Any]] = [
 ]
 
 SEO_RULES = """SEO ENEM 2026 — o público está procurando revisão de História para a prova de 08/11 (1º dia: Ciências Humanas):
+- GANCHO de revisão: parta de um erro comum, de uma pegadinha ou de um fato que surpreende sobre o tema — nunca "hoje vamos
+  revisar". A revisão vem disfarçada de história boa (quem assiste até o fim aprende sem perceber).
 - O vídeo precisa ENTREGAR revisão: em algum ponto (com palavras diferentes a cada vídeo, nem sempre no mesmo lugar) diga o que
   o ENEM costuma cobrar do tema — o conceito, a causa/consequência, ou como a questão aparece (texto-base, charge, documento).
 - TÍTULO: o assunto vem primeiro. Use "ENEM" só se couber de forma natural e honesta — não em todo vídeo, e variando a forma
@@ -246,7 +248,22 @@ def is_enem(camp: dict[str, Any] | None) -> bool:
     return bool(camp) and "enem" in str(camp.get("id", "")).lower()
 
 
-def seo_rules(fmt: str) -> str:
+SEO_CORRECTION = """SEO CORREÇÃO ENEM 2026 — a prova de Ciências Humanas já aconteceu (08/11); o público procura as questões que caíram,
+o gabarito comentado e o contexto histórico por trás de cada questão:
+- O vídeo explica o TEMA HISTÓRICO de uma questão que caiu: o que a questão cobrava, o contexto, e por que a alternativa
+  certa está certa. Só cite a questão/gabarito se estiver nas fontes; nunca invente enunciado, número de questão ou alternativa.
+- GANCHO: parta da dúvida de quem fez a prova (ex.: a pegadinha, o conceito que confundiu), com palavras próprias deste vídeo.
+- TÍTULO: o assunto primeiro + "ENEM 2026" quando couber de forma natural ("caiu no ENEM 2026", "questão do ENEM 2026").
+  PROIBIDO "gabarito oficial" se não for do Inep, "vazou", "anulada" sem fonte.
+- DESCRIÇÃO: na 1ª ou 2ª frase, "ENEM 2026" e "correção"/"questão de História" de forma natural; depois as datas-chave.
+- TAGS: "enem 2026", "correção enem 2026", "questões enem história" e variações do assunto. HASHTAGS: #ENEM2026 e 1-2 do assunto."""
+
+
+def seo_rules(fmt: str, today: date | None = None) -> str:
+    """Regras de SEO da campanha: revisão até o dia da prova; depois, correção (as questões que caíram)."""
+    from .growth import ENEM_DAY
+    if (today or date.today()) > ENEM_DAY:
+        return SEO_CORRECTION
     return SEO_RULES + ("\n" + SEO_LONG if fmt == "long" else "")
 
 

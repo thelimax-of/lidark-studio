@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { CalendarRange, Plus, Trash2, Save, GraduationCap, Rocket, Sparkles } from 'lucide-react'
 import { api, invalidate, useApi } from '../api'
-import { act, toast } from '../ui'
+import { act, Skeleton, toast } from '../ui'
+import { IconBox } from './kit'
 
 type Camp = { id?: string; name: string; focus: string; start: string; end: string; share: number; active: boolean }
 
@@ -15,14 +16,14 @@ export default function CampaignsSection({ channelId }: { channelId: number }) {
   const upd = (i: number, p: Partial<Camp>) => { setList(l => l.map((c, k) => k === i ? { ...c, ...p } : c)); setDirty(true) }
   const save = () => act(() => api(`/channels/${channelId}/campaigns`, { method: 'PUT', body: { campaigns: list } }), 'Campanhas salvas')
     .then(() => invalidate(`/channels/${channelId}/campaigns`))
-  const status = (c: Camp) => !c.active ? 'Pausada' : c.id && c.id === data?.active ? 'No ar agora'
+  const statusOf = (c: Camp) => !c.active ? 'Pausada' : c.id && c.id === data?.active ? 'No ar agora'
     : c.end < today() ? 'Encerrada' : c.start > today() ? 'Agendada' : 'Ativa'
 
   return (
     <section className="card p-5">
       <div className="flex items-start justify-between gap-3 mb-4">
         <div className="flex gap-3">
-          <div className="w-9 h-9 rounded-lg bg-panel2 border border-line2 text-muted grid place-items-center shrink-0"><CalendarRange size={18} /></div>
+          <IconBox tone="accent"><CalendarRange size={16} /></IconBox>
           <div><h3 className="font-semibold">Campanhas sazonais</h3>
             <p className="text-sm text-muted">Datas que puxam audiência (provas, aniversários, eventos). No período, parte dos vídeos do piloto automático vai para o tema da campanha e vira uma série/playlist.</p></div>
         </div>
@@ -31,13 +32,14 @@ export default function CampaignsSection({ channelId }: { channelId: number }) {
           {dirty && <button className="btn btn-sm btn-primary" onClick={save}><Save size={14} /> Salvar</button>}
         </div>
       </div>
-      {!list.length && <div className="text-[13px] text-muted">Nenhuma campanha. Crie uma para datas importantes do seu nicho.</div>}
+      {!data && <div className="space-y-3"><Skeleton className="h-28" /></div>}
+      {data && !list.length && <div className="text-[13px] text-muted rounded-[var(--r-md)] border border-dashed border-line2 px-4 py-6 text-center">Nenhuma campanha. Crie uma para datas importantes do seu nicho.</div>}
       <div className="space-y-3">
         {list.map((c, i) => (
-          <div key={c.id ?? `n${i}`} className="border border-line rounded-lg p-3 space-y-2.5">
+          <div key={c.id ?? `n${i}`} className={`surface p-3 space-y-2.5 transition-colors ${statusOf(c) === 'No ar agora' ? 'border-ok/35!' : ''}`}>
             <div className="flex flex-wrap items-center gap-2">
               <input className="input h-8! flex-1 min-w-48 font-medium" value={c.name} placeholder="Nome (vira a série/playlist)" onChange={e => upd(i, { name: e.target.value })} />
-              <span className="badge"><span className={`dot ${status(c) === 'No ar agora' ? 'text-ok' : status(c) === 'Agendada' ? 'text-info' : 'text-faint'}`} />{status(c)}</span>
+              <span className={`badge ${statusOf(c) === 'No ar agora' ? 'badge-ok' : ''}`}><span className={`dot ${statusOf(c) === 'No ar agora' ? 'text-ok animate-pulse' : statusOf(c) === 'Agendada' ? 'text-info' : 'text-faint'}`} />{statusOf(c)}</span>
               <label className="flex items-center gap-1.5 text-[12.5px] text-muted"><input type="checkbox" checked={c.active} onChange={e => upd(i, { active: e.target.checked })} /> ativa</label>
               <button className="btn btn-sm btn-icon btn-ghost" data-tip="Remover" onClick={() => { setList(l => l.filter((_, k) => k !== i)); setDirty(true) }}><Trash2 size={14} /></button>
             </div>
@@ -46,7 +48,7 @@ export default function CampaignsSection({ channelId }: { channelId: number }) {
               <label className="flex items-center gap-1.5">De <input type="date" className="input h-8! w-auto!" value={c.start} onChange={e => upd(i, { start: e.target.value })} /></label>
               <label className="flex items-center gap-1.5">até <input type="date" className="input h-8! w-auto!" value={c.end} onChange={e => upd(i, { end: e.target.value })} /></label>
               <label className="flex items-center gap-2 flex-1 min-w-56">Fatia dos vídeos
-                <input type="range" min={10} max={100} step={10} value={Math.round(c.share * 100)} onChange={e => upd(i, { share: Number(e.target.value) / 100 })} className="flex-1 accent-current" />
+                <input type="range" min={10} max={100} step={10} value={Math.round(c.share * 100)} onChange={e => upd(i, { share: Number(e.target.value) / 100 })} className="flex-1" />
                 <span className="num text-text w-9 text-right">{Math.round(c.share * 100)}%</span></label>
             </div>
           </div>
@@ -107,7 +109,7 @@ function EnemPack({ channelId }: { channelId: number }) {
     const st = ideaStatus(x.idea)
     const locked = !!x.idea && x.idea.status !== 'discarded'
     return (
-      <label key={x.key} className={`flex items-start gap-2.5 py-1.5 ${locked ? 'opacity-70' : 'cursor-pointer'}`}>
+      <label key={x.key} className={`flex items-start gap-2.5 py-1.5 px-2 -mx-2 rounded-md transition-colors ${locked ? 'opacity-70' : 'cursor-pointer hover:bg-white/[0.03]'}`}>
         <input type="checkbox" className="mt-1" disabled={locked} checked={locked || sel.has(x.key)} onChange={() => toggle(x.key)} />
         <div className="min-w-0 flex-1">
           <div className="text-[13.5px] font-medium">{x.title}</div>
@@ -124,9 +126,9 @@ function EnemPack({ channelId }: { channelId: number }) {
   const nShorts = data.shorts.filter(x => sel.has(x.key)).length
   const nLongs = data.longs.filter(x => sel.has(x.key)).length
   return (
-    <div className="mt-5 border border-line2 rounded-lg p-4 space-y-3">
+    <div className="mt-5 surface-2 ring-grad p-4 space-y-3">
       <div className="flex gap-3">
-        <div className="w-9 h-9 rounded-lg bg-panel2 border border-line2 text-muted grid place-items-center shrink-0"><GraduationCap size={18} /></div>
+        <IconBox tone="accent"><GraduationCap size={16} /></IconBox>
         <div><h4 className="font-semibold">Pacote ENEM 2026 · {data.days_left === 0 ? 'é hoje' : `faltam ${data.days_left} dia(s)`} (prova em {br(data.enem_day)})</h4>
           <p className="text-sm text-muted">Pautas dos temas de História que mais caem em Ciências Humanas, com fatos conferidos e estruturas variadas.
             Até a véspera cabem <b className="text-text">{data.short_slots}</b> Shorts nos horários do canal (respeitando espaço mínimo e limite diário);

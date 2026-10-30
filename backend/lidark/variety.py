@@ -84,21 +84,24 @@ STRUCTURES: dict[str, dict[str, Any]] = {
 }
 
 HOOKS = {
-    "pergunta": "uma pergunta provocadora que o espectador não sabe responder",
-    "numero": "um número ou dado chocante logo na primeira frase",
-    "contraintuitivo": "uma afirmação que contraria o que todo mundo acha",
-    "cena": "uma cena narrada no presente, como se o espectador estivesse lá",
-    "desafio": "um desafio direto ao espectador (ex.: 'aposto que você erra isso')",
-    "consequencia": "a consequência surpreendente primeiro, a causa depois",
+    "pergunta": "uma pergunta provocadora e ESPECÍFICA que o espectador não sabe responder (com nome, lugar ou número — nunca 'você já pensou?')",
+    "numero": "um número ou dado chocante logo nas primeiras palavras, com o que ele significa",
+    "contraintuitivo": "uma afirmação que contraria o que todo mundo aprendeu ou acha (quebra de padrão)",
+    "cena": "uma cena narrada no presente, como se o espectador estivesse lá, já no momento de tensão",
+    "desafio": "um desafio direto ao espectador (ex.: 'aposto que você erra isso'), que ele só confere assistindo",
+    "consequencia": "a consequência surpreendente primeiro, a causa depois (o espectador fica para saber o porquê)",
+    "segredo": "algo escondido, esquecido ou proibido revelado (ex.: 'isso ficou fora dos livros por 50 anos') — só se for verdade",
+    "stakes": "o que estava em jogo, em uma frase concreta (vidas, um país, um recorde, uma fortuna), antes de qualquer contexto",
 }
 
 TITLES = {
-    "pergunta": "pergunta curta e intrigante",
+    "pergunta": "pergunta curta e intrigante, com um elemento concreto (nome, lugar ou número)",
     "afirmacao": "afirmação forte e direta, sem ponto de interrogação",
-    "numero": "começa com um número ou dado",
+    "numero": "começa com um número ou dado concreto",
     "o_dia": "no formato 'O dia em que...' ou 'A vez em que...'",
     "nome": "começa com o nome do personagem/lugar seguido de uma revelação",
     "contraste": "contraste entre duas ideias (ex.: 'Era X, virou Y')",
+    "lacuna": "afirmação que esconde a peça-chave (ex.: 'O detalhe que derrubou o Império'), revelada só no vídeo",
 }
 
 NEXT_CTA = "1"  # estilo que anuncia o próximo vídeo: só com uma pauta real da fila
@@ -199,7 +202,7 @@ def series_names(ch: Channel) -> dict[str, str]:
 def recent_plans(channel_id: int, limit: int = 12) -> list[dict[str, Any]]:
     with session() as s:
         rows = s.exec(select(Script).where(Script.channel_id == channel_id).order_by(Script.id.desc()).limit(limit)).all()
-    return [{"title": r.title, "description": r.description, **(r.variety or {})} for r in rows]
+    return [{"title": r.title, "description": r.description, "hook": r.hook, **(r.variety or {})} for r in rows]
 
 
 def structure_performance(channel_id: int) -> dict[str, float]:
@@ -232,6 +235,45 @@ def _pick(options: list[str], recent: list[str], avoid_last: int, weights: dict[
         bonus = 1.0 + max(-0.5, min(1.0, ((weights or {}).get(o, 50) - 50) / 50))
         return (1 + age) * bonus
     return rng.choices(pool, weights=[w(o) for o in pool])[0]
+
+
+def _blend(a: dict[str, float] | None, b: dict[str, float] | None, wb: float = 0.5) -> dict[str, float]:
+    """Média ponderada de dois mapas {opção: peso} na escala do _pick (50 = neutro); opção só num lado fica com ele."""
+    a, b = dict(a or {}), dict(b or {})
+    out: dict[str, float] = {}
+    for k in set(a) | set(b):
+        try:
+            if k in a and k in b:
+                out[k] = (1 - wb) * float(a[k]) + wb * float(b[k])
+            else:
+                out[k] = float(a[k] if k in a else b[k])
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def dimension_weights_blend(channel_id: int) -> dict[str, dict[str, float]]:
+    """Pesos por dimensão: experimentos do growth.py (médias brutas) + bandit do learning.py (efeitos com incerteza,
+    comparando vídeos na mesma idade). Os dois na escala do _pick; o _pick limita o bônus (0,5× a 2×) e a
+    anti-repetição continua valendo — o aprendizado só inclina o sorteio, nunca fixa um molde."""
+    try:
+        from .growth import dimension_weights
+        dw = dimension_weights(channel_id) or {}
+    except Exception:  # noqa: BLE001
+        dw = {}
+    try:
+        from . import learning  # type: ignore[attr-defined]
+        lw = learning.recommend_variety(channel_id) or {}
+    except Exception:  # noqa: BLE001 — módulo ausente/sem dados: só os experimentos
+        lw = {}
+    out: dict[str, dict[str, float]] = {}
+    for dim in set(dw) | set(lw):
+        # o bandit compara na mesma idade e com incerteza: pesa um pouco mais que a média bruta
+        m = _blend(dw.get(dim) if isinstance(dw.get(dim), dict) else None,
+                   lw.get(dim) if isinstance(lw.get(dim), dict) else None, 0.6)
+        if m:
+            out[dim] = {k: max(0.0, min(100.0, v)) for k, v in m.items()}
+    return out
 
 
 def _opening(title: str) -> str:
@@ -275,12 +317,8 @@ def plan(ch: Channel, fmt: str) -> dict[str, Any]:
 def _plan(ch: Channel, fmt: str, pending: list[dict[str, Any]]) -> dict[str, Any]:
     rng = random.Random()
     hist = pending + recent_plans(ch.id)
-    perf = structure_performance(ch.id)
-    try:
-        from .growth import dimension_weights
-        dw = dimension_weights(ch.id)  # o que já se provou melhor nos vídeos publicados
-    except Exception:  # noqa: BLE001
-        dw = {}
+    dw = dimension_weights_blend(ch.id)  # o que já se provou melhor (experimentos + aprendizado com dados)
+    perf = _blend(structure_performance(ch.id), dw.get("structure"))
     structs = [k for k, v in STRUCTURES.items() if fmt in v["formats"]]
     structure = _pick(structs, [h.get("structure", "") for h in hist], 3, perf, rng)
     hook = _pick(list(HOOKS), [h.get("hook_style", "") for h in hist], 2, dw.get("hook_style"), rng)
@@ -289,7 +327,7 @@ def _plan(ch: Channel, fmt: str, pending: list[dict[str, Any]]) -> dict[str, Any
     q_share = sum(t.strip().rstrip("#Shorts").strip().endswith("?") for t in recent_titles[:6]) / max(1, len(recent_titles[:6]))
     title_opts = [t for t in TITLES if not (t == "pergunta" and q_share >= 0.5)]
     title = _pick(title_opts, [h.get("title_style", "") for h in hist], 2, dw.get("title_style"), rng)
-    cta = _pick([str(i) for i in range(len(CTA_STYLES))], [h.get("cta_style", "") for h in hist], 2, None, rng)
+    cta = _pick([str(i) for i in range(len(CTA_STYLES))], [h.get("cta_style", "") for h in hist], 2, dw.get("cta_style"), rng)
     dose = _pick([d[0] for d in GRAPHIC_DOSES], [h.get("graphics", "") for h in hist], 1, dw.get("graphics"), rng)
     out: dict[str, Any] = {"structure": structure, "hook_style": hook, "title_style": title, "cta_style": cta, "graphics": dose}
     if fmt == "short":
@@ -328,6 +366,7 @@ def prompt_block(ch: Channel, p: dict[str, Any], fmt: str) -> str:
     hist = recent_plans(ch.id, 8)
     titles = "\n".join(f"  - {h['title']}" for h in hist if h.get("title")) or "  (nenhum)"
     desc_open = "\n".join(f"  - {h['description'][:70]}" for h in hist if h.get("description")) or "  (nenhuma)"
+    hooks_open = "\n".join(f"  - {h['hook'][:90]}" for h in hist if h.get("hook")) or "  (nenhuma)"
     cta_style = CTA_STYLES[int(p.get("cta_style", 0)) % len(CTA_STYLES)]
     if str(p.get("cta_style")) == NEXT_CTA:
         if p.get("next_title"):
@@ -342,6 +381,8 @@ def prompt_block(ch: Channel, p: dict[str, Any], fmt: str) -> str:
   pode apontar para ela (ex.: "o próximo vídeo está aqui na tela"), sem anunciar um tema que não foi indicado acima.""")
     return f"""VARIEDADE (OBRIGATÓRIO — o canal não pode parecer feito em série):
 - ESTRUTURA NARRATIVA DESTE VÍDEO: "{st['name']}". {st['how']} {st['graphics']}
+  Adapte a estrutura ao tema (ex.: numa pauta de ciência, "cronologia" = a sequência do que acontece, segundo a segundo);
+  NUNCA invente datas, nomes ou fatos só para encaixar na estrutura.
 - GANCHO: a primeira frase deve ser {HOOKS.get(p.get('hook_style', ''), 'forte')}.
 - TÍTULO: {TITLES.get(p.get('title_style', ''), 'chamativo')}. NÃO comece o título com: {', '.join(repr(o) for o in p.get('avoid_openings', [])) or '(livre)'}.
 - CTA final: {cta_style}. NUNCA prometa um "próximo vídeo" além do indicado aqui. Escreva um CTA NOVO com as palavras do canal ({ch.name}), contendo "segue", "siga" ou "inscreva"; inspire-se em "{ch.cta}" sem copiá-lo.
@@ -349,6 +390,8 @@ def prompt_block(ch: Channel, p: dict[str, Any], fmt: str) -> str:
 - Não reutilize frases de efeito, aberturas ou fechamentos dos vídeos recentes.{chapters}
 TÍTULOS RECENTES DO CANAL (não imite a forma):
 {titles}
+ABERTURAS RECENTES (o gancho novo não pode começar igual nem repetir o mesmo truque):
+{hooks_open}
 DESCRIÇÕES RECENTES (a nova deve começar diferente e ser escrita do zero):
 {desc_open}"""
 

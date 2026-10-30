@@ -7,12 +7,18 @@ echo     LIDARK STUDIO - instalar atalhos
 echo   ============================================
 echo.
 echo   Vai criar no MENU INICIAR (e na area de trabalho):
-echo     - "Lidark Studio": liga o sistema e abre o painel como aplicativo
+echo     - "Lidark Studio": liga o sistema e abre o painel em TELA CHEIA
+echo       (como um jogo: cobre a barra de tarefas; F11 alterna, Ctrl+K busca tudo)
 echo     - "Parar Lidark":  desliga o sistema
 echo.
 echo   O Lidark NAO inicia sozinho com o Windows: ele so roda quando voce abrir.
 echo.
 pause
+echo.
+echo   Preparando a janela do aplicativo (pywebview / WebView2)...
+"%~dp0backend\.venv\Scripts\python.exe" -c "import webview" 2>nul || "%~dp0backend\.venv\Scripts\python.exe" -m pip install --quiet "pywebview>=5.3"
+"%~dp0backend\.venv\Scripts\python.exe" -c "import webview" 2>nul && echo   OK: janela nativa pronta. || echo   Aviso: sem pywebview - o Lidark abre pelo Edge em tela cheia.
+echo.
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$root = '%~dp0'.TrimEnd('\');" ^
   "$ws = New-Object -ComObject WScript.Shell;" ^

@@ -3,6 +3,7 @@ import clsx from 'clsx'
 import { Activity, RotateCcw, Square, Check, Loader2, Mic, Captions, Image as ImageIcon, Music, Film, ShieldCheck, Search, PenLine, Sparkles, ArrowUp, Power, Gauge } from 'lucide-react'
 import { api, invalidate, useApi, type Job } from '../api'
 import { act, ago, Empty, PageHeader, Progress, Status, Tabs } from '../ui'
+import { Bar, RowsSkeleton, useProgressive } from './kit'
 
 const KIND: Record<string, string> = {
   discover_ideas: 'Busca de pautas', score_idea: 'Nota da pauta', verify_idea: 'Checagem de fatos', manual_idea: 'Validação de ideia',
@@ -36,16 +37,16 @@ function Stepper({ job }: { job: Job }) {
   if (job.status === 'done') cur = steps.length
   if (cur < 0) cur = 0
   return (
-    <div className="grid border border-line rounded-lg overflow-hidden mt-5" style={{ gridTemplateColumns: `repeat(${steps.length}, minmax(0,1fr))` }}>
+    <div className="grid border border-line rounded-[var(--r-md)] overflow-hidden mt-5 bg-bg2/50" style={{ gridTemplateColumns: `repeat(${steps.length}, minmax(0,1fr))` }}>
       {steps.map((s, i) => {
         const done = i < cur, active = i === cur && job.status === 'running'
         return (
-          <div key={s.label} className={clsx('px-3 py-2.5 border-r border-line last:border-0 relative', active && 'bg-white/[0.04]')}>
+          <div key={s.label} className={clsx('px-3 py-2.5 border-r border-line last:border-0 relative transition-colors', active && 'bg-accent/[0.07]')}>
             <div className={clsx('flex items-center gap-1.5 text-[12.5px]', active ? 'text-text font-medium' : done ? 'text-text/80' : 'text-faint')}>
-              {done ? <Check size={14} className="text-ok" /> : active ? <Loader2 size={14} className="animate-spin" /> : <s.icon size={14} />}
+              {done ? <Check size={14} className="text-ok" /> : active ? <Loader2 size={14} className="animate-spin text-accent" /> : <s.icon size={14} />}
               <span className="truncate">{s.label}</span>
             </div>
-            <div className={clsx('absolute left-0 right-0 bottom-0 h-[2px]', done ? 'bg-ok/70' : active ? 'bg-text' : 'bg-transparent')} />
+            <div className={clsx('absolute left-0 right-0 bottom-0 h-[2px]', done ? 'bg-ok/70' : active ? 'bg-grad' : 'bg-transparent')} />
           </div>
         )
       })}
@@ -54,18 +55,20 @@ function Stepper({ job }: { job: Job }) {
 }
 
 export default function Jobs() {
-  const { data = [] } = useApi<Job[]>('/jobs?limit=100')
+  const { data = [], isLoading } = useApi<Job[]>('/jobs?limit=100')
   const [sel, setSel] = useState<number | null>(null)
   const [only, setOnly] = useState<'all' | 'active' | 'failed'>('all')
   const current = sel ?? data.find(j => j.status === 'running')?.id ?? data[0]?.id ?? null
   const { data: detail } = useApi<Job>(current ? `/jobs/${current}` : null, { refetchInterval: 1500 })
   const list = data.filter(j => only === 'all' || (only === 'active' ? ['running', 'queued'].includes(j.status) : j.status === 'failed'))
+  const [shown, more] = useProgressive(list, 40, only)
 
   return (
     <>
       <PageHeader title="Produção" subtitle="Tudo que o motor está fazendo agora, etapa por etapa." actions={<RestartButton />} />
       <Capacity />
-      {!data.length ? <Empty icon={<Activity size={20} />} title="Nenhuma tarefa ainda" /> : (
+      {isLoading && !data.length ? <div className="grid lg:grid-cols-5 gap-5"><div className="lg:col-span-2 card"><RowsSkeleton rows={6} h="h-14" /></div><div className="lg:col-span-3 skeleton h-96" /></div>
+        : !data.length ? <Empty icon={<Activity size={20} />} title="Nenhuma tarefa ainda" text="Quando o motor buscar pautas, escrever roteiros ou renderizar vídeos, as etapas aparecem aqui." /> : (
         <div className="grid lg:grid-cols-5 gap-5 items-start">
           <div className="lg:col-span-2 card overflow-hidden">
             <div className="px-3 pt-1 border-b border-line">
@@ -76,10 +79,10 @@ export default function Jobs() {
               ]} />
             </div>
             <div className="max-h-[72vh] overflow-y-auto">
-              {list.map(j => (
+              {shown.map(j => (
                 <button key={j.id} onClick={() => setSel(j.id)} className={clsx('w-full block px-4 py-3 text-left border-b border-line last:border-0 transition relative',
-                  current === j.id ? 'bg-white/[0.05]' : 'hover:bg-white/[0.02]')}>
-                  {current === j.id && <span className="absolute left-0 top-0 bottom-0 w-[2px] bg-text" />}
+                  current === j.id ? 'bg-accent/[0.07]' : 'hover:bg-white/[0.025]')}>
+                  {current === j.id && <span className="absolute left-0 top-0 bottom-0 w-[2px] bg-grad" />}
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[12px] text-muted flex items-center gap-1.5">{KIND[j.kind] ?? j.kind} <span className="text-faint num">#{j.id}</span></span>
                     <Status s={j.status} />
@@ -89,12 +92,13 @@ export default function Jobs() {
                     : <div className="text-[12px] text-faint mt-0.5 truncate">{ago(j.created_at)}{j.stage && j.status !== 'done' ? ` · ${j.stage}` : ''}</div>}
                 </button>
               ))}
+              {more}
               {!list.length && <div className="text-[13px] text-muted px-4 py-8 text-center">Nada aqui.</div>}
             </div>
           </div>
           <div className="lg:col-span-3">
             {detail && (
-              <div className="card sticky top-[68px] overflow-hidden">
+              <div className="card lg:sticky lg:top-4 overflow-hidden">
                 <div className="card-head">
                   <div className="min-w-0">
                     <div className="text-[12px] text-muted">{KIND[detail.kind] ?? detail.kind} · <span className="num">#{detail.id}</span></div>
@@ -113,15 +117,15 @@ export default function Jobs() {
                   <div className="flex items-center gap-3">
                     <Status s={detail.status} />
                     <span className="text-[13px] text-muted truncate flex-1">{detail.status === 'running' ? detail.stage : ago(detail.created_at)}</span>
-                    <span className="text-[13px] font-medium num">{Math.round(detail.progress * 100)}%</span>
+                    <span className="text-[15px] font-semibold num text-gradient">{Math.round(detail.progress * 100)}%</span>
                   </div>
                   <Progress value={detail.progress} className="mt-3" />
                   <Stepper job={detail} />
                   <div className="label mt-5">Registro</div>
-                  <pre className="text-[12px] bg-bg border border-line rounded-lg p-3.5 max-h-[42vh] overflow-auto whitespace-pre-wrap font-mono text-text/75 leading-relaxed">{detail.log || '—'}</pre>
+                  <pre className="text-[12px] bg-bg2 border border-line rounded-[var(--r-md)] p-3.5 max-h-[42vh] overflow-auto whitespace-pre-wrap font-mono text-text/75 leading-relaxed">{detail.log || '—'}</pre>
                   {detail.error && <>
                     <div className="label mt-4 text-bad!">Erro</div>
-                    <pre className="text-[12px] bg-bad/5 border border-bad/30 rounded-lg p-3.5 max-h-60 overflow-auto whitespace-pre-wrap font-mono text-[#ffa198]">{detail.error}</pre>
+                    <pre className="text-[12px] bg-bad/[0.06] border border-bad/30 rounded-[var(--r-md)] p-3.5 max-h-60 overflow-auto whitespace-pre-wrap font-mono text-bad">{detail.error}</pre>
                   </>}
                 </div>
               </div>
@@ -147,16 +151,17 @@ function Capacity() {
   return (
     <div className="card p-4 mb-5">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-        <div className="flex items-center gap-2 font-semibold"><Gauge size={16} /> Capacidade do notebook</div>
+        <div className="flex items-center gap-2 font-semibold"><span className="w-8 h-8 rounded-[9px] grid place-items-center border border-line2 bg-panel2 text-muted"><Gauge size={15} /></span> Capacidade do notebook</div>
         <div className="text-[13px]"><span className={clsx('font-semibold num', tone)}>{data.need_hours_day}h</span> <span className="text-muted">de render por dia nos horários atuais ({pct}% do dia)</span></div>
         <div className="text-[13px] text-muted">Short ≈ <span className="text-text num">{data.avg_minutes.short} min</span> · Longo ≈ <span className="text-text num">{data.avg_minutes.long} min</span>
           {!(data.measured.short + data.measured.long) && ' (estimativa — ainda sem renders medidos)'}</div>
         {data.queue_renders > 0 && <div className="text-[13px] text-muted">Fila: <span className="text-text num">{data.queue_renders}</span> vídeo(s) · ~<span className="text-text num">{data.queue_hours}h</span></div>}
       </div>
+      <Bar value={pct} tone={pct > 85 ? 'bad' : pct > 60 ? 'warn' : undefined} className="mt-3" />
       {pct > 85 && <p className="text-[12.5px] text-bad mt-2">Os horários pedem mais render do que o notebook dá conta — a fila vai crescer. Tire horários ou deixe algum canal só com Shorts.</p>}
       <div className="flex flex-wrap gap-2 mt-3">
         {data.channels.map(c => (
-          <span key={c.channel_id} className="text-[12px] px-2 py-1 rounded-md border border-line text-muted">
+          <span key={c.channel_id} className="text-[12px] px-2 py-1 rounded-md border border-line bg-bg2/50 text-muted">
             {c.name}: <span className="text-text num">{c.shorts_day}</span> short/dia · <span className="text-text num">{c.longs_week}</span> longo/sem · <span className="num">{c.minutes_day} min</span>
           </span>
         ))}

@@ -40,10 +40,14 @@ def seo_block(ch: Channel, topic: str, extra: list[str] | None = None) -> str:
     terms = search_terms(topic, extra)
     if not terms:
         return ""
-    return f"""SEO DE BUSCA (vídeo longo vive de busca no YouTube e no Google). Termos que o público REALMENTE pesquisa:
+    return f"""SEO DE BUSCA (vídeo longo vive de busca e de "vídeos sugeridos"). Termos que o público REALMENTE pesquisa
+(autocompletar do YouTube Brasil):
 {chr(10).join('- ' + t for t in terms)}
-- O TÍTULO deve conter o termo de busca mais forte e relevante (de preferência no começo), continuando chamativo e honesto.
-- A primeira frase da DESCRIÇÃO repete o termo principal de forma natural; inclua 2-3 variações ao longo do texto.
+- TÍTULO: o termo de busca mais forte e relevante nas primeiras palavras + uma lacuna de curiosidade honesta
+  (ex.: "<termo>: o detalhe que ninguém te contou" — com palavras próprias). Máximo 60 caracteres.
+- DESCRIÇÃO: a 1ª frase usa o termo principal de forma natural e diz o que a pessoa vai entender; depois 2-3 variações
+  dos termos acima ao longo do texto (frases de verdade, nunca lista de palavras).
+- Os títulos de CAPÍTULO também devem usar termos que alguém buscaria.
 - TAGS: os termos acima que tiverem relação real com o vídeo."""
 
 
@@ -59,7 +63,8 @@ def chapters_from_scenes(scenes: list[dict[str, Any]], title: str) -> list[dict[
     listing = "\n".join(f"[{i}] {_fmt(s['start'])} {s['text'][:140]}" for i, s in enumerate(scenes))
     data = llm.complete_json(f"""Vídeo do YouTube: "{title}". Abaixo, as cenas com o tempo em que começam.
 Divida o vídeo em 5 a 8 CAPÍTULOS por assunto. Cada capítulo começa numa cena; o primeiro na cena 0.
-Títulos de capítulo: 2 a 5 palavras, informativos e com termos que alguém buscaria (sem numeração, sem emoji).
+Títulos de capítulo: 2 a 5 palavras, com termos que alguém buscaria E que despertam curiosidade pelo trecho
+(ex.: "O erro de Napoleão", não "Parte 2"); sem numeração, sem emoji, sem entregar a revelação do capítulo.
 {listing}
 Responda JSON: {{"chapters": [{{"scene": 0, "title": "..."}}]}}""", temperature=0.3)
     out: list[dict[str, Any]] = []
@@ -143,15 +148,24 @@ Responda JSON com a caixa em frações da largura/altura (0 a 1): {"box": [x1, y
 
 def thumb_texts(sc: Script, n: int = 3) -> list[str]:
     base = (sc.thumbnail_text or sc.title.replace("#Shorts", "")).strip()
-    try:
-        data = llm.complete_json(f"""Vídeo do YouTube: "{sc.title}". Gancho: "{sc.hook}".
-Crie {n} textos de MINIATURA bem diferentes entre si (2 a 4 palavras cada, em português, MAIÚSCULAS):
-um de curiosidade, um com um número/dado REAL do vídeo (só se existir — nunca invente), um provocativo.
-Honestos com o conteúdo. Não repita o título.
-Responda JSON: {{"texts": ["...", "...", "..."]}}""", temperature=0.9)
-        texts = [str(t).strip()[:40] for t in data.get("texts", []) if str(t).strip()]
-    except Exception:  # noqa: BLE001
-        texts = []
+    # o roteirista já propôs alternativas no mesmo pedido do roteiro: usa sem gastar cota
+    texts = [str(t).strip()[:40] for t in ((sc.variety or {}).get("thumb_options") or [])
+             if str(t).strip() and 1 <= len(str(t).split()) <= 5]
+    if len({t.upper() for t in texts} - {base.upper()}) < n - 1:
+        from .content import THUMB_RULES, _learning
+        guide = _learning(sc.channel_id, "thumbnail")
+        try:
+            data = llm.complete_json(f"""Vídeo do YouTube: "{sc.title}". Gancho: "{sc.hook}".
+{('APRENDIZADO COM OS DADOS DO CANAL:' + chr(10) + guide) if guide else ''}
+{THUMB_RULES}
+Crie {n} textos de MINIATURA bem diferentes entre si (2 a 4 palavras cada, em português, MAIÚSCULAS), para um teste A/B:
+um de curiosidade (lacuna), um com um número/dado REAL do vídeo (só se existir — nunca invente), um de emoção/contraste.
+Honestos com o conteúdo. Não repita as palavras do título.
+Responda JSON: {{"texts": ["...", "...", "..."]}}""", temperature=0.9, required=("texts",))
+            texts += [str(t).strip()[:40] for t in data.get("texts", []) if str(t).strip()]
+        except Exception:  # noqa: BLE001
+            pass
+    texts = list(dict.fromkeys(t.upper() for t in texts))
     out = [base] + [t for t in texts if t.upper() != base.upper()]
     return out[:n] if len(out) >= n else (out + [base] * n)[:n]
 
@@ -228,7 +242,7 @@ def job_thumb_variants(ctx: JobContext) -> dict:
 def shorts_from_long(video_id: int, ctx: JobContext | None = None, count: int = 3) -> list[int]:
     """Escolhe 2-3 trechos autossuficientes do longo e escreve um Short novo para cada (que leva ao vídeo completo)."""
     from . import content, variety
-    from .content import channel_brief
+    from .content import HOOK_RULES, RETENTION_SHORT, THUMB_RULES, TITLE_RULES, TTS_RULES, channel_brief
     with session() as s:
         v = s.get(Video, video_id)
         sc = s.get(Script, v.script_id)
@@ -242,15 +256,23 @@ VÍDEO LONGO: "{sc.title}"
 ROTEIRO (cenas numeradas):
 {body}
 
-Escolha os {count} momentos MAIS fortes e autossuficientes deste vídeo (cada um entendível sozinho) e escreva um
-SHORT vertical NOVO para cada (não copie frases; reescreva para o formato curto):
-- {words - 10} a {words + 10} palavras de narração (Short enxuto, sem enrolação), 7 a 10 cenas, gancho forte na 1ª frase.
-- Só fatos que estão no roteiro do longo. Anos e números em algarismos.
+Escolha os {count} momentos MAIS fortes e autossuficientes deste vídeo (cada um entendível sozinho: uma revelação,
+uma virada, um número chocante, um personagem) e escreva um SHORT vertical NOVO para cada (não copie frases;
+reescreva para o formato curto). Os {count} Shorts precisam ser diferentes entre si: aberturas com truques diferentes
+(pergunta específica, número, cena no presente, afirmação contraintuitiva, consequência antes da causa).
+- {words - 10} a {words + 10} palavras de narração (Short enxuto, sem enrolação), 7 a 10 cenas.
+{HOOK_RULES}
+{RETENTION_SHORT}
+{TTS_RULES}
+- Só fatos que estão no roteiro do longo.
 - Termine convidando para o vídeo completo no canal (ex.: "a história completa está no vídeo longo do canal") e com um
-  pedido curto para seguir — essa é a última frase.
+  pedido curto para seguir — essa é a última frase. Antes dele, NÃO entregue tudo: deixe uma pergunta que o longo responde.
 - Cada cena com "visual": {{"kind": "real", "query": "busca curta em inglês", "query_pt": "em português"}}, "emphasis": [1-2 palavras], "label".
-Responda JSON: {{"shorts": [{{"title": "título do Short (máx 70)", "hook": "1ª frase", "scenes": [{{"text": "...", "visual": {{...}}, "emphasis": ["..."], "label": "..."}}],
-  "description": "2 frases", "tags": ["..."], "hashtags": ["#..."], "thumbnail_text": "2-4 palavras"}}]}}""", temperature=0.8)
+{TITLE_RULES}
+{THUMB_RULES}
+Responda JSON: {{"shorts": [{{"title": "título do Short (35-50 caracteres)", "hook": "1ª frase", "scenes": [{{"text": "...", "visual": {{...}}, "emphasis": ["..."], "label": "..."}}],
+  "description": "2 frases (a 1ª com o termo que alguém buscaria)", "tags": ["..."], "hashtags": ["#..."], "thumbnail_text": "2-4 palavras"}}]}}""",
+                             temperature=0.8, required=("shorts",))
     created = []
     for it in (data.get("shorts", []) if isinstance(data, dict) else [])[:count]:
         scenes = content.clean_ending([x for x in it.get("scenes", []) if isinstance(x, dict) and x.get("text")], ch.cta)
@@ -459,8 +481,9 @@ def propose_long(channel_id: int, key: str, ctx: JobContext | None = None) -> di
             + (f", {champ['engaged_views']} views engajadas" if champ.get("engaged_views") is not None else ""))
     if ctx:
         ctx.update(0.4, "Planejando os capítulos do vídeo longo")
+    guide = content._learning(channel_id, "ideas")
     data = llm.complete_json(f"""{content.channel_brief(ch)}
-
+{(chr(10) + 'APRENDIZADO COM OS DADOS DO CANAL:' + chr(10) + guide + chr(10)) if guide else ''}
 SHORT CAMPEÃO DO CANAL: "{topic}" ({perf}) — o público provou que quer este assunto.
 NARRAÇÃO DO SHORT: {champ.get('text', '')[:1500] or '(indisponível)'}
 
@@ -479,8 +502,12 @@ Regras:
 - Proibido enchimento: nada de repetir o Short, resumos redundantes, "curiosidades" genéricas ou especulação.
 - Se as fontes NÃO sustentam pelo menos 8 minutos de conteúdo novo e verificável, responda "viable": false e explique.
 - A duração ("minutes", 8 a 12) é proporcional ao material que existe de verdade.
-- Título pensado para BUSCA (o termo que as pessoas pesquisam logo no começo), honesto e chamativo; máx 60 caracteres.
-- 6 a 9 capítulos; o primeiro abre com o gancho mais forte (pode partir da pergunta que o Short deixou no ar).
+- Título pensado para BUSCA (o termo que as pessoas pesquisam logo no começo) + lacuna de curiosidade honesta; máx 60
+  caracteres. O longo não pode parecer repeteco do Short: prometa a parte da história que o Short não contou.
+- 6 a 9 capítulos; o primeiro é um COLD OPEN com o momento mais intrigante (pode partir da pergunta que o Short deixou
+  no ar). Cada capítulo abre com uma pergunta e termina com uma revelação + gancho para o próximo; o maior payoff fica
+  para o último capítulo. Planeje re-ganchos fortes por volta de 1/3 e 2/3 do vídeo.
+- "hook": a 1ª frase do vídeo, até 14 palavras, começando no conflito/no número/na cena (nunca "olá" ou "neste vídeo").
 Responda JSON: {{"viable": true, "reason": "por que o tema rende (ou não) um vídeo longo", "relevant_sources": [1, 2, 3],
   "title": "...", "angle": "o fio condutor / a grande pergunta do vídeo", "summary": "resumo factual em 3-4 frases",
   "minutes": 10, "hook": "primeira frase do vídeo",
@@ -579,7 +606,8 @@ Siga estes capítulos (cada um com os fatos indicados, confirmados nas fontes �
 {_outline_text(p)}
 Perguntas que o vídeo precisa responder: {'; '.join(p['open_questions']) or '(as do tema)'}
 Gancho sugerido: {p['hook']}
-Ritmo de vídeo longo: no fim de cada capítulo, deixe uma pergunta que o capítulo seguinte responde (segura o público).
+Ritmo de vídeo longo: no fim de cada capítulo, deixe uma pergunta que o capítulo seguinte responde (segura o público);
+nos primeiros 30 s confirme o tema do Short e prometa o que ele não contou (quem veio do Short precisa sentir que vale ficar).
 O vídeo termina com uma TELA FINAL de 20 s: o CTA convida a assistir o próximo vídeo que aparece na tela e a se inscrever."""
     j = enqueue("write_script", title=f"Roteiro longo (Short campeão): {p['title']}", channel_id=channel_id, ref_id=idea.id,
                 payload={"format": "long", "extra": extra,

@@ -6,7 +6,8 @@ import {
   Image as ImageIcon, Palette, Mic, Bot, ChevronDown, Plus, X, Loader2, Type, Music, Upload, Trash2, Flame,
 } from 'lucide-react'
 import { api, invalidate, onJob, useApi, type Channel } from '../api'
-import { act, ago, fmtNum, toast } from '../ui'
+import { act, ago, fmtNum, Skeleton, toast } from '../ui'
+import { Callout, IconBox } from './kit'
 import { Avatar, ChannelState, connectYoutube } from './Channels'
 import CampaignsSection from './Campaigns'
 import FocusCard from './FocusMode'
@@ -28,7 +29,12 @@ export default function ChannelDetail() {
       setDirty(false); invalidate(`/channels`); setPreviewV(Date.now())
     }
   }), [id])
-  if (!f) return null
+  if (!f) return (
+    <div aria-busy="true" className="space-y-6">
+      <Skeleton className="h-4 w-20" /><Skeleton className="h-64" />
+      <div className="grid xl:grid-cols-[1fr_360px] gap-6"><div className="space-y-6"><Skeleton className="h-48" /><Skeleton className="h-72" /></div><Skeleton className="h-96" /></div>
+    </div>
+  )
 
   const set = (p: Partial<Ch>) => { setF({ ...f, ...p }); setDirty(true) }
   const setTheme = (p: Record<string, string>) => set({ theme: { ...f.theme, ...p } })
@@ -45,23 +51,24 @@ export default function ChannelDetail() {
 
   return (
     <div className="pb-24">
-      <Link to="/canais" className="text-sm text-muted hover:text-text flex items-center gap-1 mb-4"><ArrowLeft size={15} /> Canais</Link>
+      <Link to="/canais" className="text-[13px] text-muted hover:text-text inline-flex items-center gap-1 mb-4 transition-colors"><ArrowLeft size={14} /> Canais</Link>
 
       {/* cabeçalho com dados do YouTube */}
       <div className="card overflow-hidden mb-6">
-        <div className="h-40 relative" style={{
-          background: f.banner_url ? `center/cover url(${f.banner_url})` : `linear-gradient(135deg, ${f.theme?.bg_center}, ${f.theme?.bg_edge})`,
-        }}><div className="absolute inset-0 bg-gradient-to-t from-panel via-panel/30 to-transparent" /></div>
+        <div className="h-44 relative" style={{
+          background: f.banner_url ? `center/cover url(${f.banner_url})` : `linear-gradient(135deg, ${f.theme?.bg_center ?? 'var(--elev)'}, ${f.theme?.bg_edge ?? 'var(--bg-2)'})`,
+        }}><div className="absolute inset-0 bg-gradient-to-t from-panel via-panel/30 to-transparent" />
+          <span className="absolute top-0 left-0 right-0 h-[2px]" style={{ background: f.color || 'var(--accent)' }} /></div>
         <div className="px-6 pb-5 -mt-12 relative flex flex-wrap items-end gap-4">
           <Avatar c={f} size={96} />
           <div className="flex-1 min-w-60 pb-1">
-            <h1 className="text-[22px] font-semibold">{f.name}</h1>
+            <h1 className="text-[24px] font-semibold tracking-tight">{f.name}</h1>
             <div className="text-muted text-sm flex items-center gap-3 flex-wrap">
               <span>{f.handle || 'sem @'}</span>
-              {f.synced_at && <span>· sincronizado há {ago(f.synced_at)}</span>}
+              {f.synced_at && <span>· sincronizado {ago(f.synced_at)}</span>}
             </div>
           </div>
-          <div className="flex items-center gap-5 text-sm pb-1">
+          <div className="flex items-center gap-2 text-sm pb-1">
             <Stat icon={<Users size={15} />} v={fmtNum(f.stats?.subscribers ?? 0)} l="inscritos" />
             <Stat icon={<Eye size={15} />} v={fmtNum(f.stats?.views ?? 0)} l="views" />
             <Stat icon={<PlaySquare size={15} />} v={String(f.stats?.videos ?? 0)} l="vídeos" />
@@ -69,14 +76,13 @@ export default function ChannelDetail() {
           <div className="flex gap-2 pb-1">
             <ChannelState c={{ ...f, connected }} />
             {connected && <button className="btn" onClick={() => act(() => api(`/channels/${f.id}/sync`, { body: {} }), 'Sincronizando com o YouTube…')}><RefreshCw size={15} /> Sincronizar</button>}
-            {f.handle && <a className="btn" href={`https://youtube.com/${f.handle}`} target="_blank" rel="noreferrer"><ExternalLink size={15} /></a>}
+            {f.handle && <a className="btn btn-icon" data-tip="Abrir no YouTube" href={`https://youtube.com/${f.handle}`} target="_blank" rel="noreferrer"><ExternalLink size={15} /></a>}
           </div>
         </div>
         {!connected && (
-          <div className="mx-6 mb-5 p-3 rounded-lg border border-warn/30 bg-warn/5 text-sm flex items-center gap-3">
-            <span className="flex-1">Este canal ainda não está conectado ao YouTube. Conecte para puxar dados, vídeos, métricas e publicar.</span>
-            <button className="btn btn-primary" onClick={() => connectYoutube(f.id)}>Conectar com Google</button>
-          </div>
+          <div className="mx-6 mb-5"><Callout tone="warn" action={<button className="btn btn-primary" onClick={() => connectYoutube(f.id)}>Conectar com Google</button>}>
+            Este canal ainda não está conectado ao YouTube. Conecte para puxar dados, vídeos, métricas e publicar.
+          </Callout></div>
         )}
       </div>
 
@@ -122,7 +128,7 @@ export default function ChannelDetail() {
                 <div className="grid grid-cols-5 gap-2">
                   {[['bg_center', 'Fundo'], ['bg_edge', 'Fundo 2'], ['gold', 'Destaque'], ['caption_hi', 'Legenda'], ['card', 'Papel']].map(([k, l]) => (
                     <label key={k} className="text-[11px] text-muted flex flex-col items-center gap-1 cursor-pointer">
-                      <span className="w-full h-10 rounded-lg border border-line relative overflow-hidden" style={{ background: f.theme?.[k] }}>
+                      <span className="w-full h-10 rounded-[var(--r-sm)] border border-line2 relative overflow-hidden shadow-[var(--shadow-sm)] hover:border-line3 transition-colors" style={{ background: f.theme?.[k] }}>
                         <input type="color" className="absolute inset-0 opacity-0 cursor-pointer" value={f.theme?.[k] ?? '#000000'} onChange={e => setTheme({ [k]: e.target.value })} />
                       </span>{l}
                     </label>
@@ -171,9 +177,9 @@ export default function ChannelDetail() {
             </div>
             <p className="text-xs text-muted mt-2">Filmagem entra quando a foto encontrada é fraca; sem filmagem boa, a cena vira gráfico animado. Fotos com crédito ganham a atribuição na descrição do vídeo.</p>
             {f.thumbs_blocked && (
-              <div className="mt-3 p-3 rounded-lg border border-warn/30 bg-warn/5 text-sm">
+              <Callout tone="warn" className="mt-3">
                 O YouTube recusou a miniatura deste canal (falta verificar por telefone em youtube.com/verify). Até lá, os vídeos longos saem com a capa no primeiro segundo.
-              </div>
+              </Callout>
             )}
           </Section>
 
@@ -182,18 +188,18 @@ export default function ChannelDetail() {
               <Toggle on={f.auto_pilot} label={f.auto_pilot ? 'Ligado' : 'Desligado'} onClick={() => set({ auto_pilot: !f.auto_pilot })} />
               <span className="text-sm text-muted">Só produz pautas com nota ≥</span>
               <input type="range" min={50} max={95} step={5} value={f.min_score_to_produce} onChange={e => set({ min_score_to_produce: Number(e.target.value) })} />
-              <span className="font-semibold w-8">{f.min_score_to_produce}</span>
+              <span className="font-semibold w-8 num text-gradient">{f.min_score_to_produce}</span>
             </div>
             <ScheduleBox f={f} set={set} />
-            <div className="flex flex-wrap items-center gap-3 mt-4 pt-4 border-t border-line2">
+            <div className="flex flex-wrap items-center gap-3 mt-4 pt-4 border-t border-line">
               <Toggle on={!f.seed_comment_off} label="Comentário do canal" onClick={() => set({ seed_comment_off: !f.seed_comment_off })} />
               <span className="text-sm text-muted flex-1 min-w-60">Minutos depois de cada vídeo ir ao ar, o canal deixa um comentário que puxa conversa (pergunta, "A ou B?", próximo tema). Você fixa pela tela Comentários.</span>
             </div>
           </Section>
 
           <details className="card group">
-            <summary className="px-5 py-4 cursor-pointer flex items-center gap-2 font-semibold list-none">
-              <ChevronDown size={18} className="transition group-open:rotate-180" /> Avançado
+            <summary className="px-5 py-4 cursor-pointer flex items-center gap-3 font-semibold list-none hover:bg-white/[0.02] rounded-[var(--r-md)] transition-colors">
+              <IconBox><ChevronDown size={16} className="transition-transform group-open:rotate-180" /></IconBox> Avançado
               <span className="text-sm text-muted font-normal">guia editorial, textos da marca, música</span>
             </summary>
             <div className="px-5 pb-5 grid md:grid-cols-2 gap-4">
@@ -214,15 +220,15 @@ export default function ChannelDetail() {
         </div>
 
         {/* prévia */}
-        <div className="card p-4 xl:sticky xl:top-6">
+        <div className="card p-4 xl:sticky xl:top-4">
           <div className="flex items-center justify-between mb-3">
             <div className="font-semibold">Prévia do vídeo</div>
-            <button className="btn !py-1" disabled={previewBusy} onClick={async () => { if (dirty) await save(); else refreshPreview() }}>
+            <button className="btn btn-sm" disabled={previewBusy} onClick={async () => { if (dirty) await save(); else refreshPreview() }}>
               {previewBusy ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} Atualizar</button>
           </div>
           <div className="grid grid-cols-2 gap-2">
             {['preview_a', 'preview_b'].map(n => (
-              <img key={n} src={`/media/${f.slug}/${n}.jpg?v=${previewV}`} className="rounded-lg border border-line w-full aspect-[9/16] object-cover bg-black"
+              <img key={n} src={`/media/${f.slug}/${n}.jpg?v=${previewV}`} className={clsx('rounded-[var(--r-md)] border border-line w-full aspect-[9/16] object-cover bg-black transition-opacity', previewBusy && 'opacity-50')}
                 onError={e => { (e.target as HTMLImageElement).style.opacity = '0.15' }} alt="" />
             ))}
           </div>
@@ -232,10 +238,10 @@ export default function ChannelDetail() {
       </div>
 
       {dirty && (
-        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-30 card px-4 py-3 flex items-center gap-3 shadow-[0_16px_40px_-12px_#000c] border-line2! ">
-          <span className="text-sm">Alterações não salvas</span>
-          <button className="btn" onClick={() => { setDirty(false); setF(data!) }}><Undo2 size={15} /> Descartar</button>
-          <button className="btn btn-primary" onClick={save}><Save size={15} /> Salvar</button>
+        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-30 glass rounded-[var(--r-lg)] border border-line2 shadow-[var(--shadow-lg)] px-4 py-2.5 flex items-center gap-3 animate-pop">
+          <span className="w-2 h-2 rounded-full bg-warn" /><span className="text-sm">Alterações não salvas</span>
+          <button className="btn btn-sm" onClick={() => { setDirty(false); setF(data!) }}><Undo2 size={14} /> Descartar</button>
+          <button className="btn btn-sm btn-primary" onClick={save}><Save size={14} /> Salvar</button>
         </div>
       )}
     </div>
@@ -249,8 +255,8 @@ function Section({ icon, title, subtitle, action, children }: { icon: ReactNode;
     <section className="card p-5">
       <div className="flex items-start justify-between gap-3 mb-4">
         <div className="flex gap-3">
-          <div className="w-9 h-9 rounded-lg bg-panel2 border border-line2 text-muted grid place-items-center shrink-0">{icon}</div>
-          <div><h3 className="font-semibold">{title}</h3>{subtitle && <p className="text-sm text-muted">{subtitle}</p>}</div>
+          <IconBox>{icon}</IconBox>
+          <div><h3 className="font-semibold">{title}</h3>{subtitle && <p className="text-[13px] text-muted mt-0.5">{subtitle}</p>}</div>
         </div>
         {action}
       </div>
@@ -261,7 +267,7 @@ function Section({ icon, title, subtitle, action, children }: { icon: ReactNode;
 
 const Label = ({ children }: { children: ReactNode }) => <div className="label">{children}</div>
 const Stat = ({ icon, v, l }: { icon: ReactNode; v: string; l: string }) => (
-  <div className="text-center"><div className="flex items-center gap-1.5 font-bold text-base">{icon}{v}</div><div className="text-[11px] text-muted">{l}</div></div>
+  <div className="surface-2 px-3 py-1.5 text-center min-w-20"><div className="flex items-center justify-center gap-1.5 font-semibold text-[15px] num"><span className="text-faint">{icon}</span>{v}</div><div className="text-[11px] text-muted">{l}</div></div>
 )
 
 function In({ label, v, on, ph }: { label: string; v: string; on: (v: string) => void; ph?: string }) {
@@ -269,13 +275,13 @@ function In({ label, v, on, ph }: { label: string; v: string; on: (v: string) =>
 }
 
 function Toggle({ on, label, onClick }: { on: boolean; label: string; onClick: () => void }) {
-  return <button onClick={onClick} className={clsx('px-3 py-1.5 rounded-full text-sm border transition', on ? 'bg-white/[0.08] border-text/50 text-text font-medium' : 'border-line text-muted hover:text-text')}>{label}</button>
+  return <button onClick={onClick} aria-pressed={on} className={clsx('h-8 px-3 rounded-full text-[13px] border transition-colors inline-flex items-center gap-1.5', on ? 'bg-accent/15 border-accent/50 text-text font-medium' : 'border-line2 text-muted hover:text-text hover:border-line3')}>{on && <span className="w-1.5 h-1.5 rounded-full bg-grad" />}{label}</button>
 }
 
 function Choice({ on, onClick, title, text }: { on: boolean; onClick: () => void; title: string; text: string }) {
   return (
-    <button onClick={onClick} className={clsx('text-left p-4 rounded-lg border transition', on ? 'border-text/60 bg-white/[0.05]' : 'border-line bg-panel2 hover:border-line2')}>
-      <div className="flex items-center gap-2 font-semibold"><span className={clsx('w-4 h-4 rounded-full border-2', on ? 'border-text bg-text' : 'border-muted')} />{title}</div>
+    <button onClick={onClick} aria-pressed={on} className={clsx('text-left p-4 rounded-[var(--r-md)] border transition-colors', on ? 'border-accent/55 bg-accent/[0.08] shadow-[0_0_0_3px_rgb(124_92_255/.12)]' : 'border-line bg-panel2 hover:border-line3')}>
+      <div className="flex items-center gap-2 font-semibold"><span className={clsx('w-4 h-4 rounded-full border-2 grid place-items-center', on ? 'border-accent' : 'border-line3')}>{on && <span className="w-2 h-2 rounded-full bg-grad" />}</span>{title}</div>
       <div className="text-sm text-muted mt-1">{text}</div>
     </button>
   )
@@ -295,7 +301,7 @@ function MascotPicker({ theme, onChange }: { theme: Record<string, string>; onCh
       <div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-11 gap-2">
         {data.map(m => (
           <button key={m.id} title={m.label} onClick={() => onChange({ mascot: m.id, mascot_color: m.id === cur ? theme.mascot_color : '', mascot_accent: m.id === cur ? theme.mascot_accent : '' })}
-            className={clsx('rounded-lg overflow-hidden border-2 transition aspect-square', cur === m.id ? 'border-text' : 'border-transparent opacity-70 hover:opacity-100')}>
+            className={clsx('rounded-[var(--r-md)] overflow-hidden border-2 transition aspect-square', cur === m.id ? 'border-accent shadow-[0_0_0_3px_rgb(124_92_255/.18)]' : 'border-transparent opacity-70 hover:opacity-100')}>
             {m.id === 'none' ? <div className="w-full h-full grid place-items-center bg-panel2 text-muted"><X /></div>
               : <img src={q(m.id)} className="w-full h-full object-cover" alt={m.label} />}
           </button>
@@ -339,7 +345,7 @@ function FontPicker({ theme, onChange }: { theme: Record<string, string>; onChan
       <div className="grid grid-cols-2 gap-2 max-h-44 overflow-y-auto pr-1">
         {(data?.title ?? []).map(t => (
           <button key={t.file} title={t.label} onClick={() => onChange({ font_title: t.file })}
-            className={clsx('px-3 py-2 rounded-lg border text-left truncate', cur === t.file ? 'border-text/60 bg-white/[0.05]' : 'border-line bg-panel2 hover:border-line2')}
+            className={clsx('px-3 py-2 rounded-[var(--r-sm)] border text-left truncate transition-colors', cur === t.file ? 'border-accent/55 bg-accent/[0.08]' : 'border-line bg-panel2 hover:border-line3')}
             style={{ fontFamily: `"lk-${t.file}"`, fontWeight: 800 }}>{t.file.replace(/(-Regular|-ExtraBold)?\.ttf/, '')}</button>
         ))}
       </div>
@@ -347,7 +353,7 @@ function FontPicker({ theme, onChange }: { theme: Record<string, string>; onChan
       <div className="flex flex-wrap gap-2">
         {(data?.caption ?? []).map(c => (
           <button key={c} onClick={() => onChange({ font_caption: c })} style={{ fontFamily: `"lk-${c}"`, fontWeight: 800 }}
-            className={clsx('px-3 py-1.5 rounded-lg border text-sm', (theme?.font_caption ?? 'FiraSans-ExtraBold.ttf') === c ? 'border-text/60 bg-white/[0.05]' : 'border-line bg-panel2')}>
+            className={clsx('px-3 py-1.5 rounded-[var(--r-sm)] border text-sm transition-colors', (theme?.font_caption ?? 'FiraSans-ExtraBold.ttf') === c ? 'border-accent/55 bg-accent/[0.08]' : 'border-line bg-panel2 hover:border-line3')}>
             {c.replace(/(-ExtraBold)?\.ttf/, '')}</button>
         ))}
       </div>
@@ -375,9 +381,9 @@ function VoicePicker({ f, set }: { f: Ch; set: (p: Partial<Ch>) => void }) {
     <>
       <div className="grid sm:grid-cols-3 gap-3">
         {br.map(v => (
-          <div key={v.id} className={clsx('p-3 rounded-lg border flex items-center gap-3 cursor-pointer', f.voice_name === v.id && f.voice_provider === 'edge' ? 'border-text/60 bg-white/[0.05]' : 'border-line bg-panel2')}
+          <div key={v.id} className={clsx('p-3 rounded-[var(--r-md)] border flex items-center gap-3 cursor-pointer transition-colors', f.voice_name === v.id && f.voice_provider === 'edge' ? 'border-accent/55 bg-accent/[0.08]' : 'border-line bg-panel2 hover:border-line3')}
             onClick={() => set({ voice_provider: 'edge', voice_name: v.id })}>
-            <button className="w-9 h-9 rounded-full bg-text text-bg grid place-items-center shrink-0" onClick={e => { e.stopPropagation(); play(v.id) }}>
+            <button className={clsx('w-9 h-9 rounded-full grid place-items-center shrink-0 transition', playing === v.id ? 'bg-grad text-white' : 'bg-elev border border-line3 text-text hover:bg-grad hover:text-white hover:border-transparent')} onClick={e => { e.stopPropagation(); play(v.id) }}>
               {playing === v.id ? <Pause size={15} /> : <Play size={15} />}</button>
             <div className="text-sm font-semibold">{v.label.replace(/\(pt-BR, /, '(')}</div>
           </div>
@@ -431,7 +437,7 @@ function ScheduleBox({ f, set }: { f: Ch; set: (p: Partial<Ch>) => void }) {
       {auto ? (
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
-            {(sug?.slots ?? []).map(s => <span key={s} className="chip !text-sm !py-1 text-ok border-ok/40">{s}</span>)}
+            {(sug?.slots ?? []).map(s => <span key={s} className="badge badge-ok">{s}</span>)}
             {!sug && <Loader2 size={14} className="animate-spin text-muted" />}
             <span className="ml-2">{num('Shorts por dia', cfg.per_day, n => setSc({ per_day: n }), 1, 8)}</span>
           </div>
@@ -447,12 +453,12 @@ function ScheduleBox({ f, set }: { f: Ch; set: (p: Partial<Ch>) => void }) {
         {num('nos primeiros', cfg.new_channel_days, n => setSc({ new_channel_days: n }), 0, 365, 1, 'dias')}
       </div>
       {sug && (
-        <div className="p-3 rounded-lg border border-line bg-panel2/40 text-sm space-y-2">
+        <div className="p-3 rounded-[var(--r-md)] border border-line bg-bg2/50 text-sm space-y-2">
           <div className="font-medium">Sugestão pelos dados: {sug.slots.join(' · ') || '—'}
             <span className="text-muted font-normal"> · {sug.per_day}/dia{sug.young ? ` · canal novo (${Math.round(sug.age_days)} dia(s))` : ''}</span></div>
           <div className="flex items-end gap-[2px] h-10" title="Força de cada hora (Brasília), 0 h → 23 h">
             {sug.hours.map(h => (
-              <div key={h.hour} className={clsx('flex-1 rounded-sm', sug.slots.includes(`${String(h.hour).padStart(2, '0')}:00`) ? 'bg-ok' : 'bg-muted/30')}
+              <div key={h.hour} className={clsx('flex-1 rounded-sm transition-colors', sug.slots.includes(`${String(h.hour).padStart(2, '0')}:00`) ? 'bg-grad' : 'bg-line3 hover:bg-faint')}
                 style={{ height: `${Math.max(6, (h.score / best) * 100)}%` }} title={`${h.hour} h · força ${h.score} · dados ${Math.round(h.data_weight * 100)}%`} />
             ))}
           </div>
@@ -476,8 +482,8 @@ function TimeChips({ slots, onChange }: { slots: string[]; onChange: (v: string[
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2">
         {slots.map(s => (
-          <span key={s} className={clsx('chip !text-sm !py-1', s.includes('long') ? 'text-violet-300 border-violet-900' : 'text-text')}>
-            {slotLabel(s)}<button onClick={() => onChange(slots.filter(x => x !== s))}><X size={13} /></button></span>
+          <span key={s} className={clsx('badge !h-7 !text-[13px] pr-1', s.includes('long') ? 'badge-accent' : '')}>
+            {slotLabel(s)}<button className="w-5 h-5 grid place-items-center rounded hover:bg-white/10 text-muted hover:text-text" aria-label="Remover" onClick={() => onChange(slots.filter(x => x !== s))}><X size={12} /></button></span>
         ))}
         {!slots.length && <span className="text-sm text-muted">Nenhum horário definido.</span>}
       </div>
@@ -489,7 +495,7 @@ function TimeChips({ slots, onChange }: { slots: string[]; onChange: (v: string[
         <select className="input !w-auto !py-1" value={fmt} onChange={e => setFmt(e.target.value)}>
           <option value="short">Short</option><option value="long">Vídeo longo</option>
         </select>
-        <button className="btn !py-1" onClick={add}><Plus size={14} /> Adicionar</button>
+        <button className="btn btn-sm" onClick={add}><Plus size={14} /> Adicionar</button>
       </div>
     </div>
   )
@@ -544,10 +550,10 @@ function MusicLibrary({ channelId }: { channelId: number }) {
 function MoodDrop({ label, hint, busy, count, onFiles, children }: { label: string; hint: string; busy: boolean; count: number; onFiles: (f: FileList) => void; children: ReactNode }) {
   const input = useRef<HTMLInputElement>(null)
   return (
-    <div className="border border-line rounded-lg p-3" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); if (e.dataTransfer.files.length) onFiles(e.dataTransfer.files) }}>
+    <div className="surface p-3 transition-colors hover:border-line2" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); if (e.dataTransfer.files.length) onFiles(e.dataTransfer.files) }}>
       <div className="flex items-center gap-2">
         <span className="font-medium text-[13px] flex-1">{label}</span>
-        <span className={`badge ${count >= 3 ? 'text-ok' : 'text-muted'}`}><span className="dot" /><span className="num">{count}</span></span>
+        <span className={`badge ${count >= 3 ? 'badge-ok' : 'text-muted'}`}><span className="dot" /><span className="num">{count}</span></span>
         <button className="btn btn-sm" onClick={() => input.current?.click()}>{busy ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />} Adicionar</button>
         <input ref={input} type="file" multiple accept="audio/*" className="hidden" onChange={e => e.target.files && onFiles(e.target.files)} />
       </div>
@@ -564,13 +570,13 @@ function ChipList({ items, onChange, placeholder, label }: { items: string[]; on
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
         {items.map(it => (
-          <span key={it} className="chip !text-sm !py-1 text-text">{label ? label(it) : it}<button onClick={() => onChange(items.filter(x => x !== it))}><X size={13} /></button></span>
+          <span key={it} className="badge !h-7 !text-[13px] pr-1">{label ? label(it) : it}<button className="w-5 h-5 grid place-items-center rounded hover:bg-white/10 text-muted hover:text-text" aria-label="Remover" onClick={() => onChange(items.filter(x => x !== it))}><X size={12} /></button></span>
         ))}
         {!items.length && <span className="text-sm text-muted">Nenhum ainda.</span>}
       </div>
       <div className="flex gap-2">
-        <input className="input !py-1.5" value={v} placeholder={placeholder} onChange={e => setV(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()} />
-        <button className="btn !py-1" onClick={add}><Plus size={14} /> Adicionar</button>
+        <input className="input" value={v} placeholder={placeholder} onChange={e => setV(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()} />
+        <button className="btn" onClick={add}><Plus size={14} /> Adicionar</button>
       </div>
     </div>
   )
@@ -592,16 +598,16 @@ function BrandKit({ channelId, beforeRun }: { channelId: number; beforeRun?: () 
     <div className="border-t border-line mt-4 pt-4">
       <div className="flex items-center justify-between mb-2">
         <div className="font-semibold">Kit de marca</div>
-        <button className="btn !py-1" disabled={busy} onClick={run}>
+        <button className="btn btn-sm" disabled={busy} onClick={run}>
           {busy ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />} {kit ? 'Gerar de novo' : 'Gerar'}</button>
       </div>
       <p className="text-xs text-muted">Foto de perfil, capa e marca d'água com o mascote e as cores do canal. Envie no YouTube Studio → Personalização.</p>
       {kit && (
         <div className="mt-3 space-y-2">
-          <a href={kit.sheet} target="_blank" rel="noreferrer"><img src={kit.sheet} className="rounded-lg border border-line w-full" alt="" /></a>
+          <a href={kit.sheet} target="_blank" rel="noreferrer"><img src={kit.sheet} className="rounded-[var(--r-md)] border border-line w-full hover:border-line3 transition-colors" alt="" /></a>
           <div className="flex flex-wrap gap-2 text-xs">
             {([['avatar', 'Foto de perfil'], ['banner', 'Capa'], ['watermark', "Marca d'água"]] as const).map(([k, l]) => (
-              <a key={k} className="btn !py-1" href={kit[k]} download>{l}</a>
+              <a key={k} className="btn btn-sm" href={kit[k]} download>{l}</a>
             ))}
           </div>
         </div>

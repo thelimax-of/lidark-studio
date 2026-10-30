@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { MessageSquare, RefreshCw, Send, X, ThumbsUp, Link2, Pin, MessageCircle, ExternalLink } from 'lucide-react'
 import { api, invalidate, useApi } from '../api'
 import { act, ago, ChannelScope, ChannelTag, Empty, PageHeader, Tabs, useChannel, useScope } from '../ui'
+import { Callout, RowsSkeleton, useProgressive } from './kit'
 import { connectYoutube } from './Channels'
 
 type C = { id: number; channel_id: number; yt_id: string; video_id: string; video_title: string; author: string; author_avatar: string; text: string
@@ -17,10 +18,11 @@ export default function Comments() {
   const { channel, channels } = useChannel()
   const [all, setAll] = useScope('comments', true)
   const [tab, setTab] = useState<'new' | 'replied' | 'ignored' | 'seed'>('new')
-  const { data } = useApi<Res>(all ? `/comments?status=${tab}` : channel ? `/comments?channel_id=${channel.id}&status=${tab}` : null)
+  const { data, isLoading } = useApi<Res>(all ? `/comments?status=${tab}` : channel ? `/comments?channel_id=${channel.id}&status=${tab}` : null)
   const refresh = () => (all || channel) && act(() => api(all ? '/comments/refresh' : `/channels/${channel!.id}/comments/refresh`, { body: {} }), 'Buscando comentários novos…')
     .then(() => setTimeout(() => invalidate('/comments'), all ? 12000 : 6000))
   const items = data?.items ?? []
+  const [shown, more] = useProgressive(items, 30, tab + String(all))
   // canais sem a permissão de responder (no modo "todos", um aviso por canal)
   const noWrite = all ? channels.filter(c => data?.can_write_by?.[c.id] === false) : data && !data.can_write && channel ? [channel] : []
   return (
@@ -28,11 +30,10 @@ export default function Comments() {
       <PageHeader title="Comentários" subtitle="Responder rápido ajuda o algoritmo. A IA sugere a resposta na voz do canal; você revisa e envia."
         actions={<><ChannelScope all={all} onChange={setAll} /><button className="btn" onClick={refresh}><RefreshCw size={14} /> Buscar agora</button></>} />
       {noWrite.length > 0 && (
-        <div className="card px-4 py-3 mb-4 flex flex-wrap items-center gap-3 text-[13px]">
-          <Link2 size={15} className="text-warn shrink-0" />
-          <span className="flex-1 min-w-60">Para responder pelo painel (e ligar Shorts aos vídeos longos), reconecte {all ? 'estes canais' : 'o canal'} e aceite as novas permissões do YouTube.</span>
-          {noWrite.map(c => <button key={c.id} className="btn btn-sm btn-primary" onClick={() => connectYoutube(c.id)}>Reconectar{all ? ` ${c.name}` : ''}</button>)}
-        </div>
+        <Callout tone="warn" icon={<Link2 size={15} />} className="mb-4"
+          action={<div className="flex flex-wrap gap-2">{noWrite.map(c => <button key={c.id} className="btn btn-sm btn-primary" onClick={() => connectYoutube(c.id)}>Reconectar{all ? ` ${c.name}` : ''}</button>)}</div>}>
+          Para responder pelo painel (e ligar Shorts aos vídeos longos), reconecte {all ? 'estes canais' : 'o canal'} e aceite as novas permissões do YouTube.
+        </Callout>
       )}
       <div className="mb-4">
         <Tabs value={tab} onChange={setTab} items={[
@@ -41,16 +42,17 @@ export default function Comments() {
         ]} />
       </div>
       {tab !== 'seed' && !!data?.counts.to_pin && (
-        <button className="card w-full px-4 py-3 mb-4 flex items-center gap-3 text-[13px] text-left hover:border-warn/40" onClick={() => setTab('seed')}>
+        <button className="w-full rounded-[var(--r-md)] border border-warn/30 bg-warn/[0.05] px-4 py-3 mb-4 flex items-center gap-3 text-[13px] text-left hover:bg-warn/[0.09] transition-colors" onClick={() => setTab('seed')}>
           <Pin size={15} className="text-warn shrink-0" />
           <span className="flex-1">{data.counts.to_pin} comentário(s) do canal esperando ser fixado(s) no YouTube — fixar no topo puxa mais conversa.</span>
-          <span className="text-faint">Ver</span>
+          <span className="btn btn-sm">Ver</span>
         </button>
       )}
       {tab === 'seed' && <p className="text-[12.5px] text-muted mb-3">Depois de publicar, o canal deixa um comentário que puxa conversa. A API do YouTube não permite fixar: abra o vídeo, toque em ⋮ no comentário → Fixar, e marque aqui.</p>}
-      {!items.length && <Empty icon={<MessageSquare size={20} />} title={tab === 'new' ? 'Nenhum comentário esperando resposta' : tab === 'seed' ? 'O canal ainda não comentou nenhum vídeo' : 'Nada aqui'}
+      {isLoading && !data && <div className="card"><RowsSkeleton rows={4} h="h-20" /></div>}
+      {!isLoading && !items.length && <Empty icon={<MessageSquare size={20} />} title={tab === 'new' ? 'Nenhum comentário esperando resposta' : tab === 'seed' ? 'O canal ainda não comentou nenhum vídeo' : 'Nada aqui'}
         text={tab === 'seed' ? 'Liga/desliga em Canais → Comentário do canal. Sai alguns minutos depois de o vídeo ir ao ar.' : 'O sistema busca comentários novos a cada 2 horas.'} />}
-      <div className="space-y-3">{items.map(c => c.status === 'seed' ? <Seed key={c.id} c={c} showChannel={all} /> : <Item key={c.id} c={c} showChannel={all} canWrite={!!(data?.can_write_by?.[c.channel_id] ?? data?.can_write)} />)}</div>
+      <div className="space-y-3">{shown.map(c => c.status === 'seed' ? <Seed key={c.id} c={c} showChannel={all} /> : <Item key={c.id} c={c} showChannel={all} canWrite={!!(data?.can_write_by?.[c.channel_id] ?? data?.can_write)} />)}{more}</div>
     </>
   )
 }
@@ -60,17 +62,17 @@ function Item({ c, canWrite, showChannel }: { c: C; canWrite: boolean; showChann
   useEffect(() => setText(c.suggestion || ''), [c.suggestion])
   const done = () => invalidate('/comments')
   return (
-    <div className="card overflow-hidden">
+    <div className="card card-hover overflow-hidden">
       <div className="p-4 flex gap-3">
-        {c.author_avatar ? <img src={c.author_avatar} referrerPolicy="no-referrer" className="w-8 h-8 rounded-full shrink-0" alt="" /> : <div className="w-8 h-8 rounded-full bg-panel2 shrink-0" />}
+        {c.author_avatar ? <img src={c.author_avatar} referrerPolicy="no-referrer" loading="lazy" className="w-8 h-8 rounded-full shrink-0 ring-1 ring-line2" alt="" /> : <div className="w-8 h-8 rounded-full bg-panel2 ring-1 ring-line2 shrink-0" />}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-[12.5px] flex-wrap">
             {showChannel && <ChannelTag id={c.channel_id} />}
             <b className="font-medium">{c.author}</b>
             <span className="text-faint">{ago(c.published_at)}</span>
-            {c.kind && <span className="badge">{KIND[c.kind] ?? c.kind}</span>}
+            {c.kind && <span className={`badge ${c.kind === 'pergunta' ? 'badge-accent' : c.kind === 'correcao' || c.kind === 'critica' ? 'badge-warn' : c.kind === 'elogio' ? 'badge-ok' : 'text-muted'}`}>{KIND[c.kind] ?? c.kind}</span>}
             {c.likes > 0 && <span className="text-faint flex items-center gap-1"><ThumbsUp size={11} />{c.likes}</span>}
-            <a href={`https://www.youtube.com/watch?v=${c.video_id}&lc=${c.yt_id}`} target="_blank" rel="noreferrer" className="text-faint hover:text-text truncate max-w-[45%] ml-auto">
+            <a href={`https://www.youtube.com/watch?v=${c.video_id}&lc=${c.yt_id}`} target="_blank" rel="noreferrer" className="text-faint hover:text-accent2 transition-colors truncate max-w-[45%] ml-auto">
               {c.video_title || 'ver no YouTube'}</a>
           </div>
           <p className="text-[13.5px] mt-1 whitespace-pre-wrap break-words">{c.text}</p>
@@ -78,10 +80,11 @@ function Item({ c, canWrite, showChannel }: { c: C; canWrite: boolean; showChann
       </div>
       {c.status === 'new' && (
         <div className="px-4 pb-4 pl-[60px]">
-          <textarea className="input min-h-[64px] text-[13px]" value={text} onChange={e => setText(e.target.value)}
+          <textarea className="input min-h-[64px] text-[13px] bg-panel2!" value={text} onChange={e => setText(e.target.value)}
             placeholder={c.suggestion ? '' : 'Escreva sua resposta…'} />
           <div className="flex items-center gap-2 mt-2">
-            <span className="text-[11.5px] text-faint num">{text.length}/1000</span>
+            {c.suggestion && <span className="badge badge-accent !h-5 text-[11px]">sugerido pela IA</span>}
+            <span className={`text-[11.5px] num ${text.length > 1000 ? 'text-bad' : 'text-faint'}`}>{text.length}/1000</span>
             <div className="flex-1" />
             <button className="btn btn-sm btn-ghost" onClick={() => act(() => api(`/comments/${c.id}/ignore`, { body: {} })).then(done)}><X size={13} /> Ignorar</button>
             <button className="btn btn-sm btn-primary" disabled={!canWrite || !text.trim()}
@@ -89,7 +92,7 @@ function Item({ c, canWrite, showChannel }: { c: C; canWrite: boolean; showChann
           </div>
         </div>
       )}
-      {c.status === 'replied' && c.reply && <div className="px-4 pb-4 pl-[60px] text-[13px] text-muted border-l-2 border-line2 ml-[60px] -mt-1">{c.reply}</div>}
+      {c.status === 'replied' && c.reply && <div className="mx-4 mb-4 ml-[60px] pl-3 text-[13px] text-muted border-l-2 border-accent/40">{c.reply}</div>}
     </div>
   )
 }
@@ -97,14 +100,14 @@ function Item({ c, canWrite, showChannel }: { c: C; canWrite: boolean; showChann
 function Seed({ c, showChannel }: { c: C; showChannel?: boolean }) {
   const toggle = () => act(() => api(`/comments/${c.id}/pinned`, { body: {} }), c.pinned ? undefined : 'Marcado como fixado').then(() => invalidate('/comments'))
   return (
-    <div className={`card overflow-hidden border-l-2 ${c.pinned ? 'border-l-ok/40' : 'border-l-warn/40'}`}>
+    <div className={`card overflow-hidden border-l-2 ${c.pinned ? 'border-l-ok/60' : 'border-l-warn/60'}`}>
       <div className="p-4 flex gap-3">
         {c.author_avatar ? <img src={c.author_avatar} referrerPolicy="no-referrer" className="w-8 h-8 rounded-full shrink-0" alt="" /> : <div className="w-8 h-8 rounded-full bg-panel2 shrink-0" />}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-[12.5px] flex-wrap">
             {showChannel && <ChannelTag id={c.channel_id} />}
             <b className="font-medium">{c.author}</b>
-            <span className="badge">Comentário do canal</span>
+            <span className="badge badge-accent">Comentário do canal</span>
             {c.seed_style && <span className="badge">{SEED[c.seed_style] ?? c.seed_style}</span>}
             <span className="text-faint">{ago(c.published_at)}</span>
             {(c.likes > 0) && <span className="text-faint flex items-center gap-1"><ThumbsUp size={11} />{c.likes}</span>}

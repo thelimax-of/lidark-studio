@@ -5,7 +5,7 @@ resp = MsgBox("Parar o Lidark agora?" & vbCrLf & "Vídeos sendo produzidos serão 
 If resp <> 6 Then WScript.Quit
 Set wmi = GetObject("winmgmts:\.\root\cimv2")
 n = 0
-Set procs = wmi.ExecQuery("SELECT * FROM Win32_Process WHERE CommandLine LIKE '%lidark.supervisor%' OR CommandLine LIKE '%uvicorn%lidark%'")
+Set procs = wmi.ExecQuery("SELECT * FROM Win32_Process WHERE CommandLine LIKE '%lidark.supervisor%' OR CommandLine LIKE '%uvicorn%lidark%' OR CommandLine LIKE '%lidark_app.py%'")
 For Each p In procs
   p.Terminate
   n = n + 1

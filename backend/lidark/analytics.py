@@ -7,22 +7,33 @@ from typing import Any
 
 from sqlmodel import select
 
+from . import cache
 from .db import session
 from .models import Idea, Insight, MetricSnapshot, Publication, Script, Video
 
 log = logging.getLogger("lidark.analytics")
 
+YT_TTL = 900  # segundos que uma resposta do YouTube Analytics vale como fresca
+
+
+def register_hooks() -> None:
+    """Coleta de métricas terminou: as séries do Analytics ficam velhas (atualizam no próximo acesso, sem esperar)."""
+    cache.on_job_done("collect_metrics", lambda _d: cache.invalidate("yt:"))
+    for kind in ("collect_metrics", "publish", "import_youtube", "setup_channel"):  # mudam números/canais da visão geral
+        cache.on_job_done(kind, lambda _d: cache.drop("ov:"))  # recalcula na hora (é rápido: o Analytics continua em cache)
+
 
 def latest_metrics(channel_id: int | None = None) -> dict[int, MetricSnapshot]:
-    """Última leitura de métricas por publicação."""
+    """Última leitura de métricas por publicação (só a última de cada uma sai do banco)."""
+    from sqlalchemy import text
+    where = "WHERE channel_id = :cid" if channel_id else ""
+    ids_sql = text(f"""SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY publication_id
+                       ORDER BY captured_at DESC, id DESC) AS rn FROM metricsnapshot {where}) WHERE rn = 1""")
     with session() as s:
-        q = select(MetricSnapshot).order_by(MetricSnapshot.captured_at)
-        if channel_id:
-            q = q.where(MetricSnapshot.channel_id == channel_id)
-        out: dict[int, MetricSnapshot] = {}
-        for m in s.exec(q).all():
-            out[m.publication_id] = m
-        return out
+        ids = [r[0] for r in s.connection().execute(ids_sql, {"cid": channel_id} if channel_id else {})]
+        if not ids:
+            return {}
+        return {m.publication_id: m for m in s.exec(select(MetricSnapshot).where(MetricSnapshot.id.in_(ids))).all()}
 
 
 def performance_table(channel_id: int) -> list[dict[str, Any]]:
@@ -54,11 +65,18 @@ def performance_table(channel_id: int) -> list[dict[str, Any]]:
                 row["avd"] = max(row.get("avd", 0.0), m.avg_view_duration or 0)
                 if "engaged_views" in (m.raw or {}):  # só leituras do Analytics trazem views engajadas
                     row["engaged"] = row.get("engaged", 0) + (m.engaged_views or 0)
+        # vídeo → roteiro → pauta numa consulta por tabela (antes eram 3 por linha)
+        vids = [k for k in by_video if isinstance(k, int)]
+        videos = {v.id: v for v in s.exec(select(Video).where(Video.id.in_(vids))).all()} if vids else {}
+        sids = {v.script_id for v in videos.values() if v.script_id}
+        scripts = {x.id: x for x in s.exec(select(Script).where(Script.id.in_(sids))).all()} if sids else {}
+        iids = {x.idea_id for x in scripts.values() if x.idea_id}
+        ideas = {x.id: x for x in s.exec(select(Idea).where(Idea.id.in_(iids))).all()} if iids else {}
         rows = []
         for vid, r in by_video.items():
-            v = s.get(Video, vid) if isinstance(vid, int) else None
-            sc = s.get(Script, v.script_id) if v else None
-            idea = s.get(Idea, sc.idea_id) if sc and sc.idea_id else None
+            v = videos.get(vid) if isinstance(vid, int) else None
+            sc = scripts.get(v.script_id) if v else None
+            idea = ideas.get(sc.idea_id) if sc and sc.idea_id else None
             rows.append({
                 "video_id": vid, "title": sc.title if sc else titles.get(vid, str(vid)),
                 "views": r["views"], "likes": r["likes"], "comments": r["comments"], "shares": r["shares"],
@@ -149,13 +167,19 @@ def daily_analytics(channel_id: int, days: int = 28) -> dict[str, Any]:
         acc = s.exec(select(Account).where(Account.channel_id == channel_id, Account.platform == "youtube")).first()
     if not acc or not acc.credentials:
         return {"rows": [], "connected": False}
-    ya = _yt_client(_yt_creds(acc), "youtubeAnalytics", "v2")
     end = date.today()
     start = end - timedelta(days=days)
-    r = ya.reports().query(ids="channel==MINE", startDate=start.isoformat(), endDate=end.isoformat(),
-                           metrics="views,estimatedMinutesWatched,subscribersGained,likes,shares",
-                           dimensions="day", sort="day").execute()
-    rows = [{"day": d, "views": v, "minutes": m, "subs": sg, "likes": lk, "shares": sh} for d, v, m, sg, lk, sh in r.get("rows", []) or []]
+
+    def fetch() -> list[dict[str, Any]]:
+        ya = _yt_client(_yt_creds(acc), "youtubeAnalytics", "v2")
+        r = ya.reports().query(ids="channel==MINE", startDate=start.isoformat(), endDate=end.isoformat(),
+                               metrics="views,estimatedMinutesWatched,subscribersGained,likes,shares",
+                               dimensions="day", sort="day").execute()
+        cache.drop("ov:")  # série nova do Analytics: a visão geral recalcula com ela
+        return [{"day": d, "views": v, "minutes": m, "subs": sg, "likes": lk, "shares": sh}
+                for d, v, m, sg, lk, sh in r.get("rows", []) or []]
+    # a consulta ao Analytics fica em cache (15 min; velho é servido enquanto atualiza em segundo plano)
+    rows = [dict(x) for x in cache.get(f"yt:daily:{channel_id}:{days}:{end.isoformat()}", fetch, ttl=YT_TTL)]
     # o Analytics só libera os dados com ~2-3 dias de atraso: os dias que faltam saem das nossas leituras por vídeo
     last = date.fromisoformat(rows[-1]["day"]) if rows else start - timedelta(days=1)
     rows += recent_estimate(channel_id, last + timedelta(days=1), end)
@@ -174,12 +198,14 @@ def recent_estimate(channel_id: int, first, last) -> list[dict[str, Any]]:
     with session() as s:
         pubs = {p.id: p for p in s.exec(select(Publication).where(Publication.channel_id == channel_id,
                                                                   Publication.platform == "youtube")).all()}
-        snaps = s.exec(select(MetricSnapshot).where(MetricSnapshot.channel_id == channel_id, MetricSnapshot.platform == "youtube")
+        # só as colunas usadas (sem o JSON "raw" de cada leitura)
+        snaps = s.exec(select(MetricSnapshot.publication_id, MetricSnapshot.captured_at, MetricSnapshot.views, MetricSnapshot.likes)
+                       .where(MetricSnapshot.channel_id == channel_id, MetricSnapshot.platform == "youtube")
                        .order_by(MetricSnapshot.captured_at)).all()
     series: dict[int, list[tuple[datetime, int, int]]] = defaultdict(list)
-    for m in snaps:
-        if m.publication_id in pubs:
-            series[m.publication_id].append((utc(m.captured_at), m.views or 0, m.likes or 0))
+    for pid, at, views, likes in snaps:
+        if pid in pubs:
+            series[pid].append((utc(at), views or 0, likes or 0))
     if not series:
         return []
 
@@ -269,7 +295,18 @@ def _channel_summary(ch, days: int) -> dict[str, Any]:
     return out
 
 
-def overview(days: int = 28, channel_id: int | None = None) -> dict[str, Any]:
+OVERVIEW_TTL = 120  # a visão geral só muda com coleta de métricas/publicação (que invalidam) — o TTL é só rede de segurança
+
+
+def overview(days: int = 28, channel_id: int | None = None, refresh: bool = False) -> dict[str, Any]:
+    """Visão de todos os canais (ou de um) — em cache; `refresh` refaz tudo (inclusive a consulta ao Analytics)."""
+    if refresh:
+        cache.drop("yt:")
+        cache.drop("ov:")
+    return cache.get(f"ov:{days}:{channel_id or 0}", lambda: _overview(days, channel_id), ttl=OVERVIEW_TTL, stale=3600)
+
+
+def _overview(days: int = 28, channel_id: int | None = None) -> dict[str, Any]:
     """Visão de todos os canais (ou de um): totais do período, comparação por canal e views diárias por canal."""
     from concurrent.futures import ThreadPoolExecutor
     chans = [c for c in _channels() if not channel_id or c.id == channel_id]

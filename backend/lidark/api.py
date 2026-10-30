@@ -15,6 +15,7 @@ from sqlmodel import Session, func, select
 from sse_starlette.sse import EventSourceResponse
 
 from . import config, jobs, llm
+from .cache import FastJSON
 from .db import get_session
 from .models import (Account, Channel, Idea, Insight, Job, MetricSnapshot, Publication, Script, Video, now)
 
@@ -45,6 +46,52 @@ def _patch(obj, data: dict[str, Any], skip=("id", "created_at")) -> None:
             except ValueError:
                 continue
         setattr(obj, k, v)
+
+
+def _rows_json(rows) -> FastJSON:
+    """Lista de modelos direto para JSON (mesmo formato do encoder do FastAPI, sem o passeio lento em Python)."""
+    return FastJSON([r.model_dump(mode="json") for r in rows])
+
+
+def _page(q, limit: Optional[int], offset: int, default: int):
+    """limit/offset opcionais (?limit=&offset=); sem limit fica o teto antigo de cada lista."""
+    n = default if limit is None else max(1, min(int(limit), 2000))
+    return q.offset(max(0, int(offset))).limit(n)
+
+
+# Campos pesados que ?slim=1 tira das listas (o detalhe de cada item continua completo)
+IDEA_HEAVY = ("facts", "sources", "score_breakdown", "score_reason")
+SCRIPT_HEAVY = ("scenes", "claims", "fact_check", "sources", "review_notes", "description")
+VIDEO_ASSETS_KEEP = ("qa", "thumbs_ab", "duration", "template", "chapters", "narration_end")
+CHANNEL_HEAVY = ("yt_description", "description", "editorial_guide", "radar", "series", "playlists", "campaigns")
+
+
+def _idea_slim(i: Idea) -> dict[str, Any]:
+    d = i.model_dump(mode="json", exclude=set(IDEA_HEAVY))
+    sb = i.score_breakdown or {}
+    d["facts_count"], d["sources_count"] = len(i.facts or []), len(i.sources or [])
+    d["better_title"] = sb.get("better_title") if isinstance(sb, dict) else None
+    return d
+
+
+def _script_slim(sc: Script) -> dict[str, Any]:
+    d = sc.model_dump(mode="json", exclude=set(SCRIPT_HEAVY))
+    d["scenes_count"], d["fact_check_count"] = len(sc.scenes or []), len(sc.fact_check or [])
+    return d
+
+
+def _video_slim(d: dict[str, Any]) -> dict[str, Any]:
+    a = d.get("assets") or {}
+    d["assets"] = {k: a[k] for k in VIDEO_ASSETS_KEEP if k in a}
+    return d
+
+
+def _channel_slim(d: dict[str, Any]) -> dict[str, Any]:
+    for k in CHANNEL_HEAVY:
+        d.pop(k, None)
+    st = d.get("stats") or {}
+    d["stats"] = {k: v for k, v in st.items() if not isinstance(v, (dict, list))}  # sem ypp/traffic (têm rota própria)
+    return d
 
 
 # ================================================================ sistema
@@ -104,21 +151,35 @@ async def events(request: Request):
 
 # ================================================================ canais
 
-@router.get("/channels")
-def list_channels(s: Session = Depends(get_session)):
+def _channel_counts(s: Session) -> dict[int, dict[str, int]]:
+    """Contagens de todos os canais em 4 consultas agrupadas (antes eram 4 por canal)."""
+    def by(model, *conds) -> dict[int, int]:
+        q = select(model.channel_id, func.count()).select_from(model)
+        for c in conds:
+            q = q.where(c)
+        return dict(s.exec(q.group_by(model.channel_id)).all())
+    parts = {"ideas": by(Idea, Idea.status == "new"), "scripts": by(Script, Script.status != "produced"),
+             "videos": by(Video, Video.status == "ready"), "published": by(Publication, Publication.status == "published")}
+    ids = {i for p in parts.values() for i in p}
+    return {i: {k: p.get(i, 0) for k, p in parts.items()} for i in ids}
+
+
+def _channels_payload(s: Session, slim: bool = False) -> list[dict[str, Any]]:
+    counts = _channel_counts(s)
+    connected = {a.channel_id for a in s.exec(select(Account).where(Account.platform == "youtube")).all() if a.credentials}
     out = []
     for ch in s.exec(select(Channel).order_by(Channel.id)).all():
         d = ch.model_dump()
-        acc = s.exec(select(Account).where(Account.channel_id == ch.id, Account.platform == "youtube")).first()
-        d["connected"] = bool(acc and acc.credentials)
-        d["counts"] = {
-            "ideas": s.exec(select(func.count()).select_from(Idea).where(Idea.channel_id == ch.id, Idea.status == "new")).one(),
-            "scripts": s.exec(select(func.count()).select_from(Script).where(Script.channel_id == ch.id, Script.status != "produced")).one(),
-            "videos": s.exec(select(func.count()).select_from(Video).where(Video.channel_id == ch.id, Video.status == "ready")).one(),
-            "published": s.exec(select(func.count()).select_from(Publication).where(Publication.channel_id == ch.id, Publication.status == "published")).one(),
-        }
-        out.append(d)
+        d["connected"] = ch.id in connected
+        d["counts"] = counts.get(ch.id) or {"ideas": 0, "scripts": 0, "videos": 0, "published": 0}
+        out.append(_channel_slim(d) if slim else d)
     return out
+
+
+@router.get("/channels")
+def list_channels(slim: bool = False, s: Session = Depends(get_session)):
+    """?slim=1 tira textos longos e JSONs grandes (ver CHANNEL_HEAVY e stats.ypp/traffic) — bom para seletor/menu."""
+    return _channels_payload(s, slim)
 
 
 @router.get("/channels/{cid}")
@@ -287,13 +348,21 @@ class IdeaIn(BaseModel):
 
 
 @router.get("/ideas")
-def list_ideas(channel_id: Optional[int] = None, status: Optional[str] = None, s: Session = Depends(get_session)):
+def list_ideas(channel_id: Optional[int] = None, status: Optional[str] = None, slim: bool = False,
+               limit: Optional[int] = None, offset: int = 0, s: Session = Depends(get_session)):
+    """?slim=1 tira facts/sources/score_breakdown/score_reason e põe facts_count, sources_count e better_title."""
     q = select(Idea)
     if channel_id:
         q = q.where(Idea.channel_id == channel_id)
     if status:
         q = q.where(Idea.status.in_(status.split(",")))
-    return s.exec(q.order_by(Idea.created_at.desc()).limit(500)).all()
+    rows = s.exec(_page(q.order_by(Idea.created_at.desc()), limit, offset, 500)).all()
+    return FastJSON([_idea_slim(i) for i in rows]) if slim else _rows_json(rows)
+
+
+@router.get("/ideas/{iid:int}")
+def get_idea(iid: int, s: Session = Depends(get_session)):
+    return _get(s, Idea, iid)
 
 
 @router.post("/ideas")
@@ -351,13 +420,16 @@ def idea_action(iid: int, action: str, data: dict[str, Any] | None = None, s: Se
 # ================================================================ roteiros
 
 @router.get("/scripts")
-def list_scripts(channel_id: Optional[int] = None, all: bool = False, s: Session = Depends(get_session)):
+def list_scripts(channel_id: Optional[int] = None, all: bool = False, slim: bool = False,
+                 limit: Optional[int] = None, offset: int = 0, s: Session = Depends(get_session)):
+    """?slim=1 tira scenes/claims/fact_check/sources/review_notes/description e põe scenes_count e fact_check_count."""
     q = select(Script)
     if not all:
         q = q.where(Script.status != "produced")  # roteiro que já virou vídeo some da lista
     if channel_id:
         q = q.where(Script.channel_id == channel_id)
-    return s.exec(q.order_by(Script.created_at.desc()).limit(300)).all()
+    rows = s.exec(_page(q.order_by(Script.created_at.desc()), limit, offset, 300)).all()
+    return FastJSON([_script_slim(x) for x in rows]) if slim else _rows_json(rows)
 
 
 @router.get("/scripts/{sid}")
@@ -422,17 +494,37 @@ def rewrite(sid: int, idx: int, data: dict[str, Any], s: Session = Depends(get_s
 # ================================================================ vídeos
 
 @router.get("/videos")
-def list_videos(channel_id: Optional[int] = None, s: Session = Depends(get_session)):
-    q = select(Video, Script).join(Script, Script.id == Video.script_id)
+def list_videos(channel_id: Optional[int] = None, slim: bool = False, limit: Optional[int] = None, offset: int = 0,
+                s: Session = Depends(get_session)):
+    """?slim=1 deixa em assets só qa/thumbs_ab/duration/template/chapters/narration_end (sem images, scenes,
+    image_credits, look, voice, music, captions) e tira a descrição das publicações. Sem slim: igual a antes."""
+    q = select(Video, Script.title).join(Script, Script.id == Video.script_id)
     if channel_id:
         q = q.where(Video.channel_id == channel_id)
+    rows = s.exec(_page(q.order_by(Video.id.desc()), limit, offset, 300)).all()
+    pubs: dict[int, list] = {}
+    if rows:  # publicações de todos os vídeos numa consulta só (antes: uma por vídeo)
+        for p in s.exec(select(Publication).where(Publication.video_id.in_([v.id for v, _ in rows]))
+                        .order_by(Publication.id)).all():
+            pubs.setdefault(p.video_id, []).append(p.model_dump(mode="json", exclude={"description"} if slim else None))
     out = []
-    for v, sc in s.exec(q.order_by(Video.id.desc()).limit(300)).all():
+    for v, title in rows:
         d = v.model_dump()
-        d["title"] = sc.title
-        d["publications"] = s.exec(select(Publication).where(Publication.video_id == v.id)).all()
-        out.append(d)
-    return out
+        d["title"] = title
+        d["publications"] = pubs.get(v.id, [])
+        out.append(_video_slim(d) if slim else d)
+    return FastJSON(out)  # vídeo em modo python (datas +00:00, como antes) e publicações em modo json ("Z", como antes)
+
+
+@router.get("/videos/{vid:int}")
+def get_video(vid: int, s: Session = Depends(get_session)):
+    """Um vídeo completo (mesmo formato de um item de GET /videos sem slim)."""
+    v = _get(s, Video, vid)
+    d = v.model_dump()
+    sc = s.get(Script, v.script_id)
+    d["title"] = sc.title if sc else ""
+    d["publications"] = s.exec(select(Publication).where(Publication.video_id == vid).order_by(Publication.id)).all()
+    return d
 
 
 @router.post("/videos/{vid}/inspect")
@@ -465,8 +557,15 @@ def delete_video(vid: int, s: Session = Depends(get_session)):
 # ================================================================ tarefas
 
 @router.get("/jobs")
-def list_jobs(limit: int = 60, s: Session = Depends(get_session)):
-    return [jobs.job_dict(j) for j in s.exec(select(Job).order_by(Job.id.desc()).limit(limit)).all()]
+def list_jobs(limit: int = 60, status: Optional[str] = None, channel_id: Optional[int] = None,
+              s: Session = Depends(get_session)):
+    """?status=queued,running e ?channel_id= filtram (opcionais)."""
+    q = select(Job)
+    if status:
+        q = q.where(Job.status.in_(status.split(",")))
+    if channel_id:
+        q = q.where(Job.channel_id == channel_id)
+    return [jobs.job_dict(j) for j in s.exec(q.order_by(Job.id.desc()).limit(max(1, min(limit, 1000)))).all()]
 
 
 @router.get("/jobs/{jid}")
@@ -501,13 +600,16 @@ def jobs_capacity(s: Session = Depends(get_session)):
     """Quanto o notebook consegue renderizar por dia × quanto os horários dos canais pedem."""
     done = s.exec(select(Job).where(Job.kind == "render_video", Job.status == "done")
                   .order_by(Job.id.desc()).limit(40)).all()
+    queued = s.exec(select(Job).where(Job.kind == "render_video", Job.status.in_(["queued", "running"]))).all()
+    refs = {j.ref_id for j in done + queued if j.ref_id}
+    fmt = dict(s.exec(select(Script.id, Script.format).where(Script.id.in_(refs))).all()) if refs else {}
     mins: dict[str, list[float]] = {"short": [], "long": []}
     for j in done:
-        sc = s.get(Script, j.ref_id) if j.ref_id else None
-        if sc and j.started_at and j.finished_at:
+        f = fmt.get(j.ref_id)
+        if f is not None and j.started_at and j.finished_at:
             m = (j.finished_at - j.started_at).total_seconds() / 60
             if 1 < m < 600:
-                mins[sc.format if sc.format in mins else "short"].append(m)
+                mins[f if f in mins else "short"].append(m)
     avg = {k: (sorted(v)[len(v) // 2] if v else (25.0 if k == "short" else 70.0)) for k, v in mins.items()}
     measured = {k: len(v) for k, v in mins.items()}
     rows, need = [], 0.0
@@ -526,11 +628,9 @@ def jobs_capacity(s: Session = Depends(get_session)):
         need += m
         rows.append({"channel_id": ch.id, "name": ch.name, "shorts_day": shorts_day, "longs_week": longs_week,
                      "minutes_day": round(m), "auto_pilot": ch.auto_pilot})
-    queued = s.exec(select(Job).where(Job.kind == "render_video", Job.status.in_(["queued", "running"]))).all()
     q_min = 0.0
     for j in queued:
-        sc = s.get(Script, j.ref_id) if j.ref_id else None
-        q_min += avg["long" if sc and sc.format == "long" else "short"] * (1 - (j.progress or 0))
+        q_min += avg["long" if fmt.get(j.ref_id) == "long" else "short"] * (1 - (j.progress or 0))
     return {"avg_minutes": {k: round(v, 1) for k, v in avg.items()}, "measured": measured, "channels": rows,
             "need_hours_day": round(need / 60, 1), "available_hours_day": 24,
             "usage": round(need / (24 * 60), 2), "queue_renders": len(queued), "queue_hours": round(q_min / 60, 1)}
@@ -641,14 +741,13 @@ def dashboard(channel_id: Optional[int] = None, s: Session = Depends(get_session
             q = q.where(c)
         return s.exec(q).one()
 
+    from .analytics import latest_metrics
     since = now() - timedelta(days=30)
-    mq = select(MetricSnapshot)
-    if channel_id:
-        mq = mq.where(MetricSnapshot.channel_id == channel_id)
-    latest: dict[int, MetricSnapshot] = {}
-    for m in s.exec(mq.order_by(MetricSnapshot.captured_at)).all():
-        latest[m.publication_id] = m
+    latest = latest_metrics(channel_id)  # só a última leitura de cada publicação sai do banco
     totals = {k: sum(getattr(m, k) for m in latest.values()) for k in ("views", "likes", "comments", "shares")}
+    iq = select(Insight.text).order_by(Insight.id.desc()).limit(6)
+    if channel_id:
+        iq = iq.where(Insight.channel_id == channel_id)
     return {
         "counts": {
             "ideas_new": cnt(Idea, Idea.status == "new"),
@@ -661,8 +760,7 @@ def dashboard(channel_id: Optional[int] = None, s: Session = Depends(get_session
             "videos_30d": cnt(Video, Video.created_at >= since),
         },
         "totals": totals,
-        "insights": [i.text for i in s.exec(select(Insight).where(Insight.channel_id == channel_id) if channel_id
-                                            else select(Insight)).all()[-6:]],
+        "insights": list(reversed(s.exec(iq).all())),
     }
 
 
@@ -690,8 +788,12 @@ def channel_performance(cid: int):
 
 
 @router.get("/channels/{cid}/analytics")
-def channel_analytics(cid: int, days: int = 28):
+def channel_analytics(cid: int, days: int = 28, refresh: bool = False):
+    """A consulta ao YouTube Analytics fica 15 min em cache; ?refresh=1 consulta de novo."""
+    from . import cache
     from .analytics import daily_analytics
+    if refresh:
+        cache.drop(f"yt:daily:{cid}:")
     try:
         return daily_analytics(cid, days)
     except Exception as e:  # noqa: BLE001
@@ -699,10 +801,35 @@ def channel_analytics(cid: int, days: int = 28):
 
 
 @router.get("/overview")
-def overview_api(days: int = 28, channel_id: Optional[int] = None):
-    """Todos os canais juntos: totais do período, comparação por canal e views diárias por canal."""
+def overview_api(days: int = 28, channel_id: Optional[int] = None, refresh: bool = False):
+    """Todos os canais juntos: totais do período, comparação por canal e views diárias por canal.
+    Em cache (Analytics 15 min; o cálculo vale até a próxima coleta/publicação); ?refresh=1 refaz tudo."""
     from .analytics import overview
-    return overview(max(1, min(days, 365)), channel_id)
+    return overview(max(1, min(days, 365)), channel_id, refresh)
+
+
+@router.get("/bootstrap")
+def bootstrap(channel_id: Optional[int] = None, s: Session = Depends(get_session)):
+    """Tudo que o painel precisa no primeiro carregamento, numa ida só:
+    {channels: [canal slim + connected + counts], dashboard: <GET /dashboard>, jobs: [job_dict ativos (queued/running)],
+     notifications_unread: int, restart: <GET /system/restart>}"""
+    active = s.exec(select(Job).where(Job.status.in_(["queued", "running"])).order_by(Job.id.desc()).limit(200)).all()
+    unread = 0
+    try:
+        from .notify import Notification
+        unread = s.exec(select(func.count()).select_from(Notification).where(Notification.read == False)).one()  # noqa: E712
+    except Exception:  # noqa: BLE001 — central de avisos ausente ou tabela ainda não criada
+        s.rollback()
+    return {"channels": _channels_payload(s, slim=True), "dashboard": dashboard(channel_id, s),
+            "jobs": [jobs.job_dict(j) for j in active], "notifications_unread": unread,
+            "restart": jobs.restart_status()}
+
+
+@router.get("/system/cache")
+def cache_stats():
+    """Idade de cada entrada do cache em memória (diagnóstico)."""
+    from . import cache
+    return cache.stats()
 
 
 @router.get("/performance")
@@ -1081,7 +1208,7 @@ def list_publications(channel_id: Optional[int] = None, s: Session = Depends(get
     q = select(Publication)
     if channel_id:
         q = q.where(Publication.channel_id == channel_id)
-    return s.exec(q.order_by(Publication.id.desc()).limit(300)).all()
+    return _rows_json(s.exec(q.order_by(Publication.id.desc()).limit(300)).all())
 
 
 @router.post("/publications")

@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ExternalLink, Film, Loader2, Trophy } from 'lucide-react'
 import { api, invalidate, onJob, useApi, type Job } from '../api'
-import { act, ChannelTag, fmtNum, SectionTitle, Skeleton, toast } from '../ui'
+import { act, ChannelTag, fmtNum, SectionTitle, toast } from '../ui'
+import { RowsSkeleton } from './kit'
 
 export type Champion = {
   key: string; channel_id: number; channel_name?: string; title: string; url?: string; thumbnail?: string; published_at?: string
@@ -54,8 +55,8 @@ export function ChampionsCard({ channelId }: { channelId?: number }) {
       <SectionTitle hint="Horas assistidas (4.000 h em 12 meses) vêm dos vídeos longos — Shorts não contam. O Short que prendeu o público vira um longo de 8-12 min com fontes.">
         <span className="inline-flex items-center gap-2"><Trophy size={15} className="text-warn" />Short campeão → vídeo longo</span>
       </SectionTitle>
-      {isLoading ? <div className="p-4"><Skeleton className="h-24" /></div> : !list.length ? (
-        <div className="p-6 text-center text-[13px] text-muted">Nenhum Short publicado com métricas ainda.</div>
+      {isLoading && !data.length ? <RowsSkeleton rows={3} h="h-14" /> : !list.length ? (
+        <div className="p-8 text-center text-[13px] text-muted flex flex-col items-center gap-2"><Trophy size={18} className="text-faint" />Nenhum Short publicado com métricas ainda.</div>
       ) : (
         <ul className="divide-y divide-line">
           {!champs.length && <li className="px-4 py-2.5 text-[12.5px] text-muted">Ainda sem campeão claro (precisa de 24 h no ar e views acima da mediana do canal). Os melhores até agora:</li>}
@@ -63,13 +64,16 @@ export function ChampionsCard({ channelId }: { channelId?: number }) {
             const working = c.long_status === 'working' || busy === c.key
             const done = c.long_status && c.long_status !== 'working' && c.long_status !== 'discarded'
             return (
-              <li key={`${c.channel_id}-${c.key}`} className="px-4 py-3 flex flex-wrap items-center gap-3">
-                {c.thumbnail ? <img src={c.thumbnail} referrerPolicy="no-referrer" className="w-10 h-14 rounded object-cover bg-black shrink-0" alt="" />
-                  : <div className="w-10 h-14 rounded bg-panel2 shrink-0" />}
+              <li key={`${c.channel_id}-${c.key}`} className={`px-4 py-3 flex flex-wrap items-center gap-3 transition-colors hover:bg-white/[0.02] ${c.champion ? 'bg-gradient-to-r from-warn/[0.05] to-transparent' : ''}`}>
+                <div className="relative shrink-0">
+                  {c.thumbnail ? <img src={c.thumbnail} referrerPolicy="no-referrer" loading="lazy" className="w-10 h-14 rounded-md object-cover bg-black border border-line" alt="" />
+                    : <div className="w-10 h-14 rounded-md bg-panel2 border border-line" />}
+                  {c.champion && <span className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-warn text-bg grid place-items-center shadow"><Trophy size={11} /></span>}
+                </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="font-medium truncate">{c.title}</span>
-                    {c.url && <a href={c.url} target="_blank" rel="noreferrer" className="text-muted hover:text-text shrink-0"><ExternalLink size={13} /></a>}
+                    {c.url && <a href={c.url} target="_blank" rel="noreferrer" className="text-faint hover:text-accent2 transition-colors shrink-0"><ExternalLink size={13} /></a>}
                   </div>
                   <div className="text-[12px] text-muted flex flex-wrap items-center gap-x-2 gap-y-1 mt-0.5">
                     {!channelId && <ChannelTag id={c.channel_id} />}
@@ -86,7 +90,7 @@ export function ChampionsCard({ channelId }: { channelId?: number }) {
                 </div>
                 <div className="flex items-center gap-3 shrink-0">
                   <div className="text-right" title={Object.entries(c.parts).map(([k, v]) => `${k}: ${v}`).join(' · ')}>
-                    <div className={`text-[18px] font-semibold num leading-none ${c.champion ? 'text-ok' : ''}`}>{c.score}</div>
+                    <div className={`text-[20px] font-semibold num leading-none ${c.champion ? 'text-gradient' : ''}`}>{c.score}</div>
                     <div className="text-[11px] text-faint mt-1">{c.champion ? 'campeão' : c.early ? 'menos de 24 h' : 'nota'}</div>
                   </div>
                   <button className={`btn btn-sm ${c.champion && !done ? 'btn-primary' : ''}`} disabled={working || !!done || c.early}

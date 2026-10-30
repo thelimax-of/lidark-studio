@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { RefreshCw, FlaskConical, Trophy } from 'lucide-react'
+import { RefreshCw, FlaskConical, Trophy, BadgeDollarSign } from 'lucide-react'
 import { api, invalidate, useApi } from '../api'
-import { act, fmtNum, SectionTitle } from '../ui'
+import { act, fmtNum, SectionTitle, Skeleton } from '../ui'
 
 // ---------------------------------------------------------------- progresso para a monetização
 
@@ -23,8 +23,8 @@ function Meter({ label, have, need, sub }: { label: string; have: number; need: 
         <span className="text-muted">{label}</span>
         <span className="num"><b className="font-semibold">{fmtNum(Math.round(have))}</b><span className="text-faint"> / {fmtNum(need)}</span></span>
       </div>
-      <div className="h-1.5 rounded-full bg-line overflow-hidden mt-1.5"><div className={`h-full rounded-full ${p >= 1 ? 'bg-ok' : 'bg-text/75'}`} style={{ width: `${Math.max(1.5, p * 100)}%` }} /></div>
-      <div className="text-[11.5px] text-faint mt-1">{sub}</div>
+      <div className="h-2 rounded-full bg-line overflow-hidden mt-2"><div className={`h-full rounded-full transition-[width] duration-700 ${p >= 1 ? 'bg-ok' : 'bg-grad'}`} style={{ width: `${Math.max(1.5, p * 100)}%` }} /></div>
+      <div className="flex justify-between text-[11px] mt-1"><span className="text-faint">{sub}</span><span className={`num ${p >= 1 ? 'text-ok' : 'text-muted'}`}>{Math.floor(p * 100)}%</span></div>
     </div>
   )
 }
@@ -32,8 +32,9 @@ function Meter({ label, have, need, sub }: { label: string; have: number; need: 
 const when = (d: number | null) => d === 0 ? 'atingido' : d == null ? 'fora do ritmo atual' : d > 730 ? 'mais de 2 anos no ritmo atual' : `~${d} dias no ritmo atual`
 
 export function YppCard({ channelId, compact }: { channelId: number; compact?: boolean }) {
-  const { data: y } = useApi<Ypp>(`/channels/${channelId}/ypp`)
+  const { data: y, isLoading } = useApi<Ypp>(`/channels/${channelId}/ypp`)
   const [tier, setTier] = useState<TierKey>('full')
+  if (isLoading && !y) return <Skeleton className={compact ? 'h-32' : 'h-40'} />
   if (!y || !y.connected) return null
   if (!y.tiers) return <section className="card p-4 text-[13px] text-muted">Monetização: {y.error || 'sem dados ainda'}</section>
   // a regra "full" expira em 01/02/2027 (o backend deixa de mandar); cai na regra nova
@@ -54,7 +55,7 @@ export function YppCard({ channelId, compact }: { channelId: number; compact?: b
           {!compact && <button className="btn btn-sm btn-icon btn-ghost" data-tip="Atualizar agora"
             onClick={() => act(() => api(`/channels/${channelId}/ypp?refresh=true`)).then(() => invalidate(`/channels/${channelId}/ypp`))}><RefreshCw size={14} /></button>}
         </div>}>
-        Caminho para monetizar
+        <span className="inline-flex items-center gap-2"><BadgeDollarSign size={15} className="text-accent" />Caminho para monetizar</span>
       </SectionTitle>
       <div className="p-4 grid md:grid-cols-[1fr_1fr_1fr_auto] gap-5 items-start">
         <Meter label="Inscritos" have={y.subs} need={t.subs} sub={`+${y.rates.subs_per_day.toFixed(1)}/dia · ${when(t.subs_eta)}`} />
@@ -63,7 +64,7 @@ export function YppCard({ channelId, compact }: { channelId: number; compact?: b
         <Meter label="Horas em vídeos longos (12 meses)" have={y.hours_12m} need={t.hours} sub={`${y.rates.hours_per_day.toFixed(1)} h/dia · ${when(t.hours_eta)}`} />
         <div className="md:w-44 md:border-l md:border-line md:pl-5">
           <div className="text-[12px] text-muted">Previsão</div>
-          <div className="text-[17px] font-semibold mt-0.5 capitalize">{eta ?? (t.eta_days === 0 ? 'Elegível!' : '—')}</div>
+          <div className={`text-[18px] font-semibold mt-0.5 capitalize ${t.eta_days === 0 ? 'text-ok' : eta ? 'text-gradient' : ''}`}>{eta ?? (t.eta_days === 0 ? 'Elegível!' : '—')}</div>
           <div className="text-[11.5px] text-faint mt-0.5 leading-snug">{eta ? 'no ritmo dos últimos 28 dias' : 'o ritmo atual ainda não chega lá; precisa acelerar'}</div>
         </div>
       </div>
@@ -98,7 +99,7 @@ export function ExperimentsCard({ channelId }: { channelId: number }) {
   return (
     <section className="card overflow-hidden">
       <SectionTitle hint="Cada vídeo testa combinações diferentes; aqui aparece o que de fato rende mais no seu canal">
-        <span className="flex items-center gap-2"><FlaskConical size={15} className="text-muted" />Laboratório de experimentos</span>
+        <span className="flex items-center gap-2"><FlaskConical size={15} className="text-accent" />Laboratório de experimentos</span>
       </SectionTitle>
       {e.videos < 3 ? (
         <div className="p-4 text-[13px] text-muted">
@@ -114,12 +115,12 @@ export function ExperimentsCard({ channelId }: { channelId: number }) {
           )}
           <div className="p-4 grid md:grid-cols-2 xl:grid-cols-3 gap-4">
             {e.dimensions.map(d => (
-              <div key={d.key} className="border border-line rounded-lg overflow-hidden">
-                <div className="px-3 py-2 text-[12.5px] font-medium border-b border-line bg-panel2">{d.label}</div>
+              <div key={d.key} className="surface overflow-hidden">
+                <div className="px-3 py-2 text-[12.5px] font-medium border-b border-line bg-panel2 flex items-center justify-between">{d.label}{d.winner && <Trophy size={12} className="text-warn" />}</div>
                 <table className="w-full text-[12.5px]">
                   <tbody>
                     {d.options.slice(0, 5).map(o => (
-                      <tr key={o.key} className="border-b border-line last:border-0">
+                      <tr key={o.key} className={`border-b border-line last:border-0 ${o.key === d.winner ? 'bg-warn/[0.05]' : ''}`}>
                         <td className="px-3 py-1.5 truncate max-w-[150px]">{o.key === d.winner && <Trophy size={11} className="inline text-warn mr-1 -mt-0.5" />}{o.label}</td>
                         <td className={`px-2 py-1.5 text-right num ${o.n < 2 ? 'text-faint' : ''}`}>{o.perf}</td>
                         <td className="px-2 py-1.5 text-right num text-muted">{o.retention}%</td>

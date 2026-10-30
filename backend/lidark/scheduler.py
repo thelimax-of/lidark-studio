@@ -223,5 +223,10 @@ def start() -> None:
     _sched.add_job(backup_db, "date", run_date=datetime.now() + timedelta(seconds=30), id="backup_boot")
     from .channels import sync_all
     _sched.add_job(sync_all, "interval", hours=12, id="sync", max_instances=1, coalesce=True)
+    from . import autogrowth, notify as _notify
+    _sched.add_job(autogrowth.tick, "interval", minutes=30, id="autogrowth", max_instances=1, coalesce=True,
+                   next_run_time=datetime.now() + timedelta(minutes=12))
+    _sched.add_job(_notify.scan_jobs, "interval", minutes=5, id="notify_scan", max_instances=1, coalesce=True)
+    _sched.add_job(_notify.prune, "cron", hour=4, minute=10, id="notify_prune", max_instances=1, coalesce=True)
     _sched.start()
     log.info("agendador iniciado")

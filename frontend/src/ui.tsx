@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { X, Loader2, CheckCircle2, AlertTriangle, Info, MoreHorizontal } from 'lucide-react'
 import type { Channel } from './api'
@@ -25,9 +25,10 @@ export function ChannelProvider({ children }: { children: ReactNode }) {
   const channel = data.find(c => c.id === id) ?? data[0] ?? null
   const setChannelId = (v: number) => { setId(v); try { localStorage.setItem('channel', String(v)) } catch { /* noop */ } }
   useEffect(() => {
-    const accent = channel?.theme?.gold || channel?.color || '#e0a93b'
-    document.documentElement.style.setProperty('--accent', accent)
-    document.documentElement.style.setProperty('--accent2', channel?.theme?.gold_light || lighten(accent))
+    // A marca (violeta → ciano) é fixa; a cor do canal vira --channel (bg-channel, text-channel…).
+    const c = channel?.color || channel?.theme?.gold || '#7c5cff'
+    document.documentElement.style.setProperty('--channel', c)
+    document.documentElement.style.setProperty('--channel-2', channel?.theme?.gold_light || lighten(c))
   }, [channel?.id, channel?.theme?.gold, channel?.theme?.gold_light, channel?.color])
   return <Ctx.Provider value={{ channels: data, channel, setChannelId }}>{children}</Ctx.Provider>
 }
@@ -36,7 +37,7 @@ export const useChannel = () => useContext(Ctx)
 // ---------------------------------------------------------------- filtro "Todos os canais" (local de cada página)
 
 /** Cores fixas por canal para gráficos (as cores de marca dos canais são parecidas demais entre si). */
-const SERIES = ['#d9a53a', '#5b9bf5', '#4cc38a', '#c084fc', '#f2727f', '#38bdf8', '#a3e635', '#fb923c']
+const SERIES = ['#8b6cff', '#22d3ee', '#34d399', '#f472b6', '#fbbf24', '#60a5fa', '#a3e635', '#fb923c']
 export const seriesColor = (channels: Channel[], id: number) => SERIES[Math.max(0, channels.findIndex(c => c.id === id)) % SERIES.length]
 
 /** Lembra, por página, se o filtro está em "Todos os canais" ou no canal selecionado. */
@@ -49,7 +50,7 @@ export function useScope(page: string, initialAll: boolean): [boolean, (all: boo
   return [all, set]
 }
 
-/** Seletor "Todos os canais" + canais. Escolher um canal também troca o canal selecionado no menu lateral. */
+/** Seletor "Todos os canais" + canais. Escolher um canal também troca o canal selecionado no menu do topo. */
 export function ChannelScope({ all, onChange }: { all: boolean; onChange: (all: boolean) => void }) {
   const { channels, channel, setChannelId } = useChannel()
   return (
@@ -88,7 +89,7 @@ export function Toaster() {
   return (
     <div className="fixed bottom-4 right-4 z-[80] flex flex-col gap-2 w-[360px] max-w-[calc(100vw-2rem)]">
       {items.map(t => (
-        <div key={t.id} className="card bg-panel2! border-line2! px-3.5 py-3 flex gap-2.5 items-start text-[13px] animate-pop shadow-[0_16px_40px_-12px_#000c]">
+        <div key={t.id} role="status" className="toast px-3.5 py-3 flex gap-2.5 items-start text-[13px] animate-pop">
           {t.kind === 'ok' ? <CheckCircle2 className="text-ok shrink-0 mt-px" size={16} /> :
             t.kind === 'err' ? <AlertTriangle className="text-bad shrink-0 mt-px" size={16} /> :
               <Info className="text-info shrink-0 mt-px" size={16} />}
@@ -191,12 +192,12 @@ export function Menu({ items, trigger, align = 'right' }: {
 
 export function ScoreRing({ score, size = 40 }: { score: number | null | undefined; size?: number }) {
   const s = score ?? 0
-  const color = score == null ? '#3a3a40' : s >= 80 ? '#3fb950' : s >= 65 ? '#d29922' : s >= 50 ? '#db6d28' : '#f85149'
+  const color = score == null ? 'var(--line-3)' : s >= 80 ? 'var(--ok)' : s >= 65 ? 'var(--warn)' : s >= 50 ? '#fb923c' : 'var(--bad)'
   const r = size / 2 - 3, c = 2 * Math.PI * r
   return (
     <div className="relative shrink-0" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="-rotate-90">
-        <circle cx={size / 2} cy={size / 2} r={r} stroke="#232327" strokeWidth="3" fill="none" />
+        <circle cx={size / 2} cy={size / 2} r={r} stroke="var(--line)" strokeWidth="3" fill="none" />
         <circle cx={size / 2} cy={size / 2} r={r} stroke={color} strokeWidth="3" fill="none"
           strokeDasharray={c} strokeDashoffset={c * (1 - s / 100)} strokeLinecap="round" style={{ transition: 'stroke-dashoffset .5s ease' }} />
       </svg>
@@ -230,9 +231,9 @@ export function Modal({ open, onClose, title, children, wide }: { open: boolean;
   }, [open, onClose])
   if (!open) return null
   return createPortal(
-    <div className="fixed inset-0 z-[70] bg-black/60 grid place-items-center p-4 animate-[enter_.15s_ease_both]" onMouseDown={onClose}>
-      <div className={clsx('card bg-panel! border-line2! w-full max-h-[88vh] overflow-auto animate-pop shadow-[0_24px_60px_-12px_#000e]', wide ? 'max-w-4xl' : 'max-w-lg')} onMouseDown={e => e.stopPropagation()}>
-        <div className="card-head sticky top-0 bg-panel z-10">
+    <div className="fixed inset-0 z-[70] backdrop grid place-items-center p-4 animate-[enter_.15s_ease_both]" onMouseDown={onClose}>
+      <div role="dialog" aria-modal="true" aria-label={title} className={clsx('modal w-full max-h-[88vh] overflow-auto animate-pop', wide ? 'max-w-4xl' : 'max-w-lg')} onMouseDown={e => e.stopPropagation()}>
+        <div className="card-head sticky top-0 glass z-10 rounded-t-[var(--r-lg)]">
           <h3 className="card-title">{title}</h3>
           <button className="btn btn-sm btn-icon btn-ghost" onClick={onClose}><X size={16} /></button>
         </div>
@@ -255,7 +256,7 @@ export function Empty({ icon, title, text, action }: { icon: ReactNode; title: s
 export function Progress({ value, className }: { value: number; className?: string }) {
   return (
     <div className={clsx('h-1 rounded-full bg-line overflow-hidden', className)}>
-      <div className="h-full rounded-full bg-text transition-all duration-500" style={{ width: `${Math.round(value * 100)}%` }} />
+      <div className="h-full rounded-full bg-grad transition-[width] duration-500" style={{ width: `${Math.round(value * 100)}%` }} />
     </div>
   )
 }
@@ -276,11 +277,11 @@ export function Skeleton({ className }: { className?: string }) {
 
 /** Mini gráfico de linha (sem eixos) para cartões de indicador. */
 export function Sparkline({ data, height = 32, className }: { data: number[]; height?: number; className?: string }) {
+  const id = 'sg' + useId().replace(/:/g, '')
   if (data.length < 2) return <div style={{ height }} className={className} />
   const w = 120, max = Math.max(...data, 1), min = Math.min(...data, 0)
   const pts = data.map((v, i) => [(i / (data.length - 1)) * w, height - 2 - ((v - min) / (max - min || 1)) * (height - 4)])
   const d = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ')
-  const id = 'sg' + Math.round(Math.random() * 1e6)
   return (
     <svg viewBox={`0 0 ${w} ${height}`} preserveAspectRatio="none" className={clsx('w-full', className)} style={{ height }}>
       <defs><linearGradient id={id} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--accent)" stopOpacity=".22" /><stop offset="100%" stopColor="var(--accent)" stopOpacity="0" /></linearGradient></defs>

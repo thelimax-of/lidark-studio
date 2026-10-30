@@ -42,6 +42,10 @@ def job_discover(ctx: JobContext) -> dict:
                         tags=([it.get("enem_link", "")] if it.get("enem_link") else []) +
                              ([growth.campaign_tag(act)] if act and (camp or it.get("campaign")) else []) +
                              ([f"de_short:{it['from_short']}"[:120]] if it.get("from_short") else []))
+            # sinais da descoberta (gancho, busca, potencial viral) para a avaliação e o painel
+            disc = {k: it[k] for k in ("hook", "search_query", "viral", "viral_score", "rank_score") if it.get(k) is not None}
+            if disc:
+                idea.score_breakdown = {"discovery": disc}
             s.add(idea)
             s.commit()
             s.refresh(idea)
@@ -59,7 +63,7 @@ def _score(ch: Channel, idea_id: int, ctx: JobContext | None = None) -> None:
     with session() as s:
         idea = s.get(Idea, idea_id)
     try:
-        r = content.score_idea(ch, idea.title, idea.angle, idea.summary)
+        r = content.score_idea(ch, idea.title, idea.angle, idea.summary, fmt=idea.format)
     except Exception as e:  # noqa: BLE001
         if ctx:
             ctx.log(f"Falha ao avaliar '{idea.title}': {e}")
@@ -67,8 +71,10 @@ def _score(ch: Channel, idea_id: int, ctx: JobContext | None = None) -> None:
     with session() as s:
         idea = s.get(Idea, idea_id)
         idea.score = r["score"]
-        idea.score_breakdown = {"criteria": r["criteria"], "raw": r["raw_score"],
-                                "improvements": r["improvements"], "better_title": r["better_title"]}
+        idea.score_breakdown = {**{k: v for k, v in (idea.score_breakdown or {}).items() if k == "discovery"},
+                                "criteria": r["criteria"], "raw": r["raw_score"],
+                                "improvements": r["improvements"], "better_title": r["better_title"],
+                                **{k: r[k] for k in ("better_hook", "prediction", "viral", "viral_score") if r.get(k) is not None}}
         idea.score_reason = r["reason"]
         s.add(idea)
         s.commit()

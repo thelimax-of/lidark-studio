@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { Send } from 'lucide-react'
-import { api, invalidate, useApi, type Video } from '../api'
+import { Send, ShieldAlert } from 'lucide-react'
+import { api, invalidate, mediaUrl, useApi, type Video } from '../api'
 import { act, Field, Modal } from '../ui'
 
 export default function PublishModal({ video, onClose }: { video: Video; onClose: () => void }) {
-  const { data: accounts = [] } = useApi<any[]>(`/accounts?channel_id=${video.channel_id}`)
+  const { data: accounts = [], isLoading } = useApi<any[]>(`/accounts?channel_id=${video.channel_id}`)
   const [sel, setSel] = useState<number[]>([])
   const [when, setWhen] = useState('')
   const [privacy, setPrivacy] = useState('public')
@@ -17,14 +17,20 @@ export default function PublishModal({ video, onClose }: { video: Video; onClose
   return (
     <Modal open onClose={onClose} title="Publicar vídeo">
       <div className="space-y-4">
-        <div className="text-sm font-medium">{video.title}</div>
+        <div className="flex items-center gap-3 surface-2 p-2.5">
+          <div className={video.format === 'long' ? 'w-16 h-9 rounded-md overflow-hidden bg-black shrink-0' : 'w-8 h-14 rounded-md overflow-hidden bg-black shrink-0'}>
+            {video.thumbnail_path && <img src={mediaUrl(video.thumbnail_path)} className="w-full h-full object-cover" alt="" />}
+          </div>
+          <div className="text-sm font-medium leading-snug line-clamp-2">{video.title}</div>
+        </div>
         <Field label="Contas">
-          {accounts.length === 0 && <div className="text-sm text-muted">Nenhuma conta conectada. Conecte em <b>Canais → Contas</b>.</div>}
+          {isLoading && <div className="skeleton h-11" />}
+          {!isLoading && accounts.length === 0 && <div className="text-sm text-muted">Nenhuma conta conectada. Conecte em <b>Canais → Contas</b>.</div>}
           <div className="space-y-2">
             {accounts.map(a => (
-              <label key={a.id} className="flex items-center gap-3 p-2 rounded-lg bg-panel2 border border-line text-sm">
+              <label key={a.id} className={`flex items-center gap-3 px-3 h-11 rounded-[var(--r-md)] border text-sm cursor-pointer transition-colors ${sel.includes(a.id) ? 'border-accent/50 bg-accent/[0.08]' : 'border-line bg-panel2 hover:border-line3'}`}>
                 <input type="checkbox" checked={sel.includes(a.id)} onChange={e => setSel(e.target.checked ? [...sel, a.id] : sel.filter(x => x !== a.id))} />
-                <span className="capitalize font-semibold w-20">{a.platform}</span>{a.display_name}
+                <span className="capitalize font-semibold w-20">{a.platform}</span><span className="text-muted truncate">{a.display_name}</span>
               </label>
             ))}
           </div>
@@ -38,12 +44,13 @@ export default function PublishModal({ video, onClose }: { video: Video; onClose
           </Field>
         </div>
         {qaFail && (
-          <label className="flex gap-2 items-start text-sm p-3 rounded-lg border border-warn/30 bg-warn/5">
+          <label className="flex gap-2.5 items-start text-sm p-3 rounded-[var(--r-md)] border border-warn/30 bg-warn/[0.06] cursor-pointer">
+            <ShieldAlert size={15} className="text-warn shrink-0 mt-0.5" />
             <input type="checkbox" className="mt-1" checked={force} onChange={e => setForce(e.target.checked)} />
             <span>Este vídeo foi <b>reprovado no inspetor de qualidade</b>. Marque para publicar mesmo assim.</span>
           </label>
         )}
-        <button className="btn btn-primary w-full justify-center" disabled={!sel.length || (qaFail && !force)} onClick={submit}><Send size={16} /> {when ? 'Agendar' : 'Publicar agora'}</button>
+        <button className="btn btn-primary btn-lg w-full" disabled={!sel.length || (qaFail && !force)} onClick={submit}><Send size={16} /> {when ? 'Agendar' : 'Publicar agora'}</button>
       </div>
     </Modal>
   )

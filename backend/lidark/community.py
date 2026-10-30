@@ -109,8 +109,10 @@ def suggest_replies(ch: Channel, ctx: JobContext | None = None) -> None:
 
 Você cuida dos comentários do canal. Para cada comentário abaixo, classifique e escreva uma resposta na voz do canal.
 REGRAS da resposta: curta (até 220 caracteres), calorosa e natural, em português do Brasil; responda perguntas com fatos
-corretos (se não tiver certeza, diga que vai pesquisar); agradeça correções com humildade; incentive a conversa com uma
-pergunta quando fizer sentido; NUNCA invente fatos, nunca peça inscrição em toda resposta, sem links, no máximo 1 emoji.
+corretos (se não tiver certeza, diga que vai pesquisar); agradeça correções com humildade; quando fizer sentido, puxe a
+conversa com um fato extra curto ou uma pergunta específica (respostas viram mais comentários, e comentários ajudam o
+vídeo a ser recomendado); se o comentário sugerir um tema, diga que anotou (sem prometer data); NUNCA invente fatos,
+nunca peça inscrição em toda resposta, sem links, no máximo 1 emoji; varie as aberturas (não comece todas com "Valeu").
 Spam, golpe, ofensa ou propaganda → kind "spam" e resposta vazia.
 
 COMENTÁRIOS:
@@ -313,6 +315,7 @@ def seed_text(pub_id: int, style: str | None = None) -> tuple[str, str]:
         how += (": ofereça estas opções reais da fila (pode resumir os títulos) e peça o voto → " + " | ".join(ideas[:2])
                 if len(ideas) >= 2 else ": deixe a pessoa sugerir, dando um exemplo concreto do nicho")
     avoid = "\n".join(f"- {c.text[:160]}" for c in recent[:6]) or "(nenhum ainda)"
+    draft = str(((sc.variety or {}) if sc else {}).get("pinned_comment") or "").strip()
     prompt = f"""{channel_brief(ch)}
 
 Você é quem cuida do canal e vai deixar o PRIMEIRO comentário no vídeo que acabou de sair, para puxar conversa
@@ -325,6 +328,9 @@ ROTEIRO:
 
 O COMENTÁRIO DEVE SER: {how}.
 Tamanho: {size}, até 260 caracteres, {emoji}.
+{('IDEIA DO ROTEIRISTA (aproveite só se encaixar no formato pedido acima; pode reescrever): ' + draft) if draft else ''}
+O QUE FAZ AS PESSOAS RESPONDEREM: um detalhe concreto do vídeo (nome, número, decisão), uma resposta fácil de dar em
+poucas palavras, e um lado para defender. Pergunta aberta demais ("o que acharam?") não recebe resposta.
 REGRAS: escreva no idioma do canal ({ch.language}), natural, como gente de verdade — na voz do canal, não de robô;
 use só fatos que estão no roteiro; sem links, sem hashtags; NUNCA peça curtida, inscrição, sininho ou compartilhamento;
 não comece com "E aí, galera", "Fala, pessoal" nem "Comenta aí"; não repita a abertura nem a estrutura destes

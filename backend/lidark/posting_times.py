@@ -275,3 +275,35 @@ def next_free(ch: Channel, when: datetime, fmt: str = "short") -> datetime:
             return t
         t += timedelta(minutes=30)
     return _utc(when)
+
+
+# ---------------------------------------------------------------- ritmo inicial de cada vídeo (piloto de crescimento)
+
+def early_views(channel_id: int, days: int = 60) -> list[dict[str, Any]]:
+    """Por publicação do canal: idade, views atuais e views em 6/24/48 h (interpoladas das leituras).
+
+    Usado para achar estouros (muito acima da mediana na mesma idade) e fracassos claros."""
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    with session() as s:
+        pubs = s.exec(select(Publication).where(Publication.channel_id == channel_id, Publication.status == "published",
+                                                Publication.published_at >= since)).all()
+        fmt = {v.id: v.format for v in s.exec(select(Video).where(Video.channel_id == channel_id)).all()}
+        snaps: dict[int, list[MetricSnapshot]] = {}
+        ids = [p.id for p in pubs]
+        if ids:
+            for m in s.exec(select(MetricSnapshot).where(MetricSnapshot.publication_id.in_(ids))
+                            .order_by(MetricSnapshot.captured_at)).all():
+                snaps.setdefault(m.publication_id, []).append(m)
+    now_ = datetime.now(timezone.utc)
+    out = []
+    for p in pubs:
+        at = _utc(p.published_at)
+        if not at or at > now_:
+            continue
+        ss = snaps.get(p.id, [])
+        age = (now_ - at).total_seconds() / 3600
+        out.append({"publication_id": p.id, "video_id": p.video_id, "external_id": p.external_id, "title": p.title,
+                    "url": p.url, "short": _is_short(p, fmt), "age_hours": round(age, 1),
+                    "views": int(ss[-1].views) if ss else 0,
+                    **{f"v{h}": (round(x) if (x := _views_at(at, ss, h)) is not None else None) for h in (6, 24, 48)}})
+    return out

@@ -78,6 +78,20 @@ def summarize(curve: list[list[float]], duration: float, scenes: list[dict[str, 
             "worst_scenes": worst, "best_scenes": best, "scenes": per_scene}
 
 
+def curve_quality(curve: list[list[float]], duration: float) -> dict[str, Any]:
+    """Números da curva para o aprendizado (learning.py): retenção aos 3s, no meio e no fim (relativa ao início)
+    e o "desempenho relativo de retenção" do YouTube (0-1; 0,5 = típico de vídeos de duração parecida)."""
+    if not curve or not duration:
+        return {}
+    s = summarize(curve, duration, None)
+    rel = [r[2] for r in curve if len(r) > 2]
+    out = {k: s[k] for k in ("hook", "mid", "end") if k in s}
+    if rel:
+        out["relative"] = round(sum(rel) / len(rel), 3)
+        out["relative_hook"] = round(sum(rel[:5]) / len(rel[:5]), 3)
+    return out
+
+
 def channel_retention(channel_id: int) -> list[dict[str, Any]]:
     """Uma linha por vídeo publicado com curva disponível."""
     rows = []

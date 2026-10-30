@@ -111,12 +111,27 @@ def experiments(channel_id: int) -> dict[str, Any]:
             if base_perf - loser["perf"] >= 10:
                 lessons.append(f"{label}: “{loser['label']}” rende menos (desempenho {loser['perf']}, {loser['n']} vídeos)")
         dims.append({"key": key, "label": label, "options": opts, "winner": winner["key"] if winner else None})
+    # lições: as do aprendizado bayesiano (normalizadas pela idade, com confiança) substituem as médias simples acima,
+    # que com 2 vídeos por opção "achavam" vencedores por acaso; as médias continuam na tabela do painel
+    try:
+        from .learning import _get_state, _lessons
+        bayes = [x["text"] for x in _lessons(_get_state(), channel_id, None, 8)]
+    except Exception as e:  # noqa: BLE001
+        log.info("lições bayesianas: %s", e)
+        bayes = None
     return {"videos": len(rows), "base_perf": round(base_perf), "base_retention": round(base_ret, 1),
-            "dimensions": dims, "lessons": lessons}
+            "dimensions": dims, "lessons": bayes if bayes is not None else lessons, "naive_lessons": lessons}
 
 
 def dimension_weights(channel_id: int) -> dict[str, dict[str, float]]:
-    """{dimensão: {opção: desempenho médio}} só com opções testadas o bastante — usado no sorteio."""
+    """{dimensão: {opção: peso}} para o sorteio do variety.py (50 = neutro). Vem do bandit bayesiano (learning.py:
+    Thompson sampling com prior compartilhado entre canais, views normalizadas pela idade); se ele falhar, cai na média
+    simples antiga, só com opções testadas o bastante."""
+    try:
+        from .learning import recommend_variety
+        return recommend_variety(channel_id)
+    except Exception as e:  # noqa: BLE001
+        log.info("pesos bayesianos: %s", e)
     out: dict[str, dict[str, float]] = {}
     for d in experiments(channel_id).get("dimensions", []):
         w = {o["key"]: float(o["perf"]) for o in d["options"] if o["n"] >= MIN_N}

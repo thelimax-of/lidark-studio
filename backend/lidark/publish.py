@@ -471,4 +471,9 @@ def job_collect_metrics(ctx: JobContext) -> dict:
             generate_insights(cid, min_hours=20)
         except Exception as e:  # noqa: BLE001
             ctx.log(f"Aprendizados canal {cid}: {e}")
+    try:  # métricas novas → refaz o aprendizado (features, bandit, previsões)
+        from .learning import refresh as learning_refresh
+        ctx.log(f"Aprendizado: {learning_refresh(only).get('verdict', '')}")
+    except Exception as e:  # noqa: BLE001
+        ctx.log(f"Aprendizado: {e}")
     return {"snapshots": total}

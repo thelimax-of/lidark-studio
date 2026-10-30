@@ -1,8 +1,23 @@
-import { QueryClient, useQuery } from '@tanstack/react-query'
+import { QueryClient, useQuery, type Query } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 
+export class ApiError extends Error {
+  status: number
+  constructor(message: string, status: number) { super(message); this.status = status }
+}
+
+/** Os dados mudam por eventos SSE (invalidação), então podem ficar "frescos" por mais tempo sem refetch em rajada. */
 export const qc = new QueryClient({
-  defaultOptions: { queries: { refetchOnWindowFocus: false, staleTime: 5_000 } },
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      staleTime: 20_000,
+      gcTime: 24 * 3600_000,  // necessário para o cache persistido (partida instantânea)
+      retry: (n, e) => !(e instanceof ApiError && e.status >= 400 && e.status < 500) && n < 1,
+      retryDelay: 800,
+    },
+  },
 })
 
 export async function api<T = any>(path: string, opts: { method?: string; body?: unknown } = {}): Promise<T> {
@@ -14,13 +29,30 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
   if (!r.ok) {
     let msg = r.statusText
     try { msg = (await r.json()).detail ?? msg } catch { /* noop */ }
-    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+    throw new ApiError(typeof msg === 'string' ? msg : JSON.stringify(msg), r.status)
   }
+  if (r.status === 204) return undefined as T
   return r.json()
 }
 
-export const useApi = <T = any>(path: string | null, opts: { refetchInterval?: number } = {}) =>
-  useQuery<T>({ queryKey: [path], queryFn: () => api<T>(path!), enabled: !!path, ...opts })
+const base = (k: unknown) => String(k ?? '').split('?')[0]
+/** Mantém os dados anteriores enquanto carrega só quando é a "mesma tela" com outro filtro
+ *  (ex.: /ideas?channel_id=1 → /ideas?channel_id=2). Detalhes de outro item (/scripts/1 → /scripts/2) não herdam. */
+
+export const useApi = <T = any>(path: string | null, opts: { refetchInterval?: number; staleTime?: number; keepPrevious?: boolean } = {}) => {
+  const { keepPrevious = true, ...rest } = opts
+  return useQuery<T>({
+    queryKey: [path], queryFn: () => api<T>(path!), enabled: !!path, ...rest,
+    placeholderData: keepPrevious
+      ? ((prev: any, q?: Query<any, any, any, any>) => (q && base(q.queryKey[0]) === base(path) ? prev : undefined)) as any
+      : undefined,
+  })
+}
+
+/** Pré-carrega uma rota da API (usado no hover do menu). Não refaz se ainda estiver fresco. */
+export const prefetch = (path: string | null | undefined) => {
+  if (path) void qc.prefetchQuery({ queryKey: [path], queryFn: () => api(path), staleTime: 20_000 })
+}
 
 export const invalidate = (prefix: string) =>
   qc.invalidateQueries({ predicate: q => String(q.queryKey[0] ?? '').startsWith(prefix) })
@@ -83,7 +115,10 @@ export const mediaUrl = (p: string) => (p ? '/media/' + p.replace(/\\/g, '/').sp
 
 // ---------------------------------------------------------------- eventos ao vivo
 
+export type Notification = { id: number | string; kind: string; title: string; body: string; link: string; created_at: string; read: boolean }
+
 const listeners = new Set<(j: Job) => void>()
+const notifListeners = new Set<(n: Notification) => void>()
 
 export function useLiveEvents() {
   const [connected, setConnected] = useState(false)
@@ -101,6 +136,13 @@ export function useLiveEvents() {
           ;['/ideas', '/scripts', '/videos', '/dashboard', '/channels', '/publications', '/overview', '/performance'].forEach(invalidate)
         }
       })
+      es.addEventListener('notification', (e) => {
+        try {
+          const n = JSON.parse((e as MessageEvent).data) as Notification
+          notifListeners.forEach(l => l(n))
+        } catch { /* noop */ }
+        invalidate('/notifications')
+      })
       es.onerror = () => { setConnected(false); es?.close(); retry = window.setTimeout(connect, 3000) }
     }
     connect()
@@ -112,4 +154,9 @@ export function useLiveEvents() {
 export function onJob(fn: (j: Job) => void) {
   listeners.add(fn)
   return () => { listeners.delete(fn) }
+}
+
+export function onNotification(fn: (n: Notification) => void) {
+  notifListeners.add(fn)
+  return () => { notifListeners.delete(fn) }
 }

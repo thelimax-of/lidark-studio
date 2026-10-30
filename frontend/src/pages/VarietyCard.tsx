@@ -1,6 +1,7 @@
 import { AlertTriangle, ListVideo, CheckCircle2 } from 'lucide-react'
 import { useApi } from '../api'
-import { SectionTitle } from '../ui'
+import { SectionTitle, Skeleton } from '../ui'
+import { Bar } from './kit'
 import { connectYoutube } from './Channels'
 
 type Item = { key: string; label: string; count: number }
@@ -20,7 +21,7 @@ function Bars({ items, total, names }: { items: Item[]; total: number; names?: R
       {items.slice(0, 5).map(i => (
         <div key={i.key} className="flex items-center gap-2 text-[12.5px]">
           <span className="w-36 truncate text-muted">{names?.[i.key] ?? i.label}</span>
-          <div className="flex-1 h-1.5 rounded-full bg-line overflow-hidden"><div className="h-full rounded-full bg-text/70" style={{ width: `${(i.count / Math.max(1, total)) * 100}%` }} /></div>
+          <Bar value={(i.count / Math.max(1, total)) * 100} className="flex-1" />
           <span className="w-5 text-right num text-muted">{i.count}</span>
         </div>
       ))}
@@ -30,7 +31,7 @@ function Bars({ items, total, names }: { items: Item[]; total: number; names?: R
 
 export default function VarietyCard({ channelId }: { channelId: number }) {
   const { data: r } = useApi<Report>(`/channels/${channelId}/variety`)
-  if (!r) return null
+  if (!r) return <Skeleton className="h-48" />
   const n = r.planned
   const tone = r.score == null ? 'text-muted' : r.score >= 75 ? 'text-ok' : r.score >= 50 ? 'text-warn' : 'text-bad'
   return (
@@ -42,7 +43,7 @@ export default function VarietyCard({ channelId }: { channelId: number }) {
       <div className="p-4 space-y-4">
         {r.warnings.length > 0 ? (
           <div className="space-y-1.5">
-            {r.warnings.map(w => <div key={w} className="flex items-center gap-2 text-[13px]"><AlertTriangle size={14} className="text-warn shrink-0" />{w}</div>)}
+            {r.warnings.map(w => <div key={w} className="flex items-center gap-2 text-[13px] rounded-md bg-warn/[0.05] border border-warn/20 px-2.5 py-1.5"><AlertTriangle size={14} className="text-warn shrink-0" />{w}</div>)}
           </div>
         ) : n > 0 && <div className="flex items-center gap-2 text-[13px] text-muted"><CheckCircle2 size={14} className="text-ok" />Nada se repetindo demais.</div>}
         {n === 0 ? (
@@ -53,7 +54,7 @@ export default function VarietyCard({ channelId }: { channelId: number }) {
             <div><div className="label">Ganchos</div><Bars items={r.hooks} total={n} names={HOOK} /></div>
             <div><div className="label">Tratamento de cor</div><Bars items={r.grades} total={n} names={GRADE} /></div>
             <div><div className="label">Títulos em pergunta</div>
-              <div className="flex items-center gap-2 text-[12.5px]"><div className="flex-1 h-1.5 rounded-full bg-line overflow-hidden"><div className="h-full rounded-full bg-text/70" style={{ width: `${r.question_share}%` }} /></div><span className="num text-muted">{r.question_share}%</span></div>
+              <div className="flex items-center gap-2 text-[12.5px]"><Bar value={r.question_share} className="flex-1" tone={r.question_share > 50 ? 'warn' : undefined} /><span className="num text-muted">{r.question_share}%</span></div>
             </div>
           </div>
         )}

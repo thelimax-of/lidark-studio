@@ -101,7 +101,7 @@ def _gemini_once(prompt: str, system: str | None, json_mode: bool, temperature: 
         try:
             r = httpx.post(
                 f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                headers={"x-goog-api-key": key}, json=body, timeout=120,
+                headers={"x-goog-api-key": key}, json=body, timeout=_timeout(120),
             )
             if r.status_code == 429:
                 # o Google diz quanto esperar (cota por minuto: segundos; cota diária: horas) — respeita isso
@@ -118,8 +118,16 @@ def _gemini_once(prompt: str, system: str | None, json_mode: bool, temperature: 
             cands = data.get("candidates") or []
             if not cands:
                 raise LLMError(f"Gemini sem resposta: {data.get('promptFeedback')}")
-            text = "".join(p.get("text", "") for p in cands[0].get("content", {}).get("parts", []))
+            # modelos com "raciocínio" mandam partes thought=true: não fazem parte da resposta
+            text = "".join(p.get("text", "") for p in cands[0].get("content", {}).get("parts", []) if not p.get("thought"))
+            if not text.strip():
+                raise LLMError(f"Gemini {model} sem texto (finishReason={cands[0].get('finishReason')})")
+            if cands[0].get("finishReason") == "MAX_TOKENS":
+                log.warning("Gemini %s: resposta cortada pelo limite de tokens (o JSON será consertado)", model)
             return LLMResult(text, "gemini", model)
+        except httpx.TimeoutException as e:
+            _cool(ck, 30)  # chave/modelo lento agora: a próxima chave (ou o próximo provedor) tenta
+            last_err = LLMError(f"Gemini {model} demorou demais ({type(e).__name__})")
         except httpx.HTTPError as e:
             last_err = e
     raise last_err or QuotaError("Todas as chaves Gemini em espera")
@@ -169,7 +177,7 @@ def _glm(prompt: str, system: str | None, json_mode: bool, temperature: float,
             time.sleep(wait)
         with _glm_slots:
             r = httpx.post(f"{s['glm_base_url'].rstrip('/')}/chat/completions",
-                           headers={"Authorization": f"Bearer {s['glm_api_key']}"}, json=body, timeout=240)
+                           headers={"Authorization": f"Bearer {s['glm_api_key']}"}, json=body, timeout=_timeout(240))
         if r.status_code != 429:
             break
     if r.status_code == 429:
@@ -198,7 +206,7 @@ def _ollama(prompt: str, system: str | None, json_mode: bool, temperature: float
     if json_mode:
         body["format"] = "json"
     try:
-        r = httpx.post(f"{s['ollama_url']}/api/chat", json=body, timeout=600)
+        r = httpx.post(f"{s['ollama_url']}/api/chat", json=body, timeout=_timeout(600))
     except httpx.ConnectError as e:
         raise LLMError("Ollama não está rodando") from e
     r.raise_for_status()
@@ -212,56 +220,226 @@ PROVIDERS = {"gemini": _gemini, "glm": _glm, "ollama": _ollama}
 
 # ---------------------------------------------------------------- API pública
 
+# Cache em memória para prompts idênticos (ex.: tarefa refeita depois de falhar adiante, dois cliques seguidos):
+# economiza a cota grátis. Só guarda respostas que viraram JSON válido, e por pouco tempo.
+_CACHE_TTL = 15 * 60
+_CACHE_MAX = 96
+_cache: dict[str, tuple[float, LLMResult]] = {}
+_tl = threading.local()  # tempo limite da chamada atual (lido pelos provedores)
+
+
+def _timeout(default: float) -> float:
+    t = getattr(_tl, "timeout", None)
+    return float(t) if t else default
+
+
+def _cache_key(prompt: str, system: str | None, json_mode: bool, temperature: float,
+               images: list[bytes] | None, prefer: str | None) -> str:
+    import hashlib
+    h = hashlib.sha1()
+    for part in (prompt, system or "", str(json_mode), f"{temperature:.2f}", prefer or ""):
+        h.update(part.encode("utf-8", "ignore"))
+        h.update(b"\x00")
+    for img in images or []:
+        h.update(hashlib.sha1(img).digest())
+    return h.hexdigest()
+
+
+def _cache_get(key: str) -> LLMResult | None:
+    with _lock:
+        hit = _cache.get(key)
+        if hit and time.time() - hit[0] < _CACHE_TTL:
+            return hit[1]
+        _cache.pop(key, None)
+    return None
+
+
+def _cache_put(key: str, res: LLMResult) -> None:
+    with _lock:
+        if len(_cache) >= _CACHE_MAX:
+            for k, _ in sorted(_cache.items(), key=lambda kv: kv[1][0])[:_CACHE_MAX // 4]:
+                _cache.pop(k, None)
+        _cache[key] = (time.time(), res)
+
+
+def _cache_drop(key: str) -> None:
+    with _lock:
+        _cache.pop(key, None)
+
+
 def complete(prompt: str, *, system: str | None = None, json_mode: bool = False,
              temperature: float = 0.7, images: list[bytes] | None = None,
-             prefer: str | None = None) -> LLMResult:
+             prefer: str | None = None, exclude: set[str] | list[str] | None = None,
+             timeout: float | None = None, cache: bool = False) -> LLMResult:
+    """Primeiro provedor disponível da fila (Gemini → GLM → Ollama), pulando os que falham.
+
+    exclude: provedores a pular nesta chamada (ex.: o que acabou de devolver JSON quebrado).
+    timeout: tempo limite (s) de cada requisição HTTP desta chamada (padrão de cada provedor se None).
+    cache: reaproveita a resposta de um prompt idêntico dos últimos minutos."""
+    key = _cache_key(prompt, system, json_mode, temperature, images, prefer) if cache else ""
+    if key:
+        hit = _cache_get(key)
+        if hit:
+            log.info("LLM: resposta reaproveitada do cache (%s)", hit.provider)
+            return hit
     order = list(config.get("llm_order"))
     if prefer and prefer in order:
         order.remove(prefer)
         order.insert(0, prefer)
+    skip = set(exclude or ())
+    if skip and all(n in skip for n in order if n in PROVIDERS):
+        skip = set()  # todos excluídos: melhor tentar de novo do que não tentar
     errors = []
-    for name in order:
-        fn = PROVIDERS.get(name)
-        if not fn:
-            continue
-        try:
-            res = fn(prompt, system, json_mode, temperature, images, None)
-            _count(name, True)
-            return res
-        except Exception as e:  # noqa: BLE001 — qualquer falha passa para o próximo
-            _count(name, False)
-            log.warning("LLM %s falhou: %s", name, e)
-            errors.append(f"{name}: {e}")
+    old_t = getattr(_tl, "timeout", None)
+    _tl.timeout = timeout
+    try:
+        for name in order:
+            fn = PROVIDERS.get(name)
+            if not fn or name in skip:
+                continue
+            try:
+                res = fn(prompt, system, json_mode, temperature, images, None)
+                if not (res.text or "").strip():
+                    raise LLMError("resposta vazia")
+                _count(name, True)
+                if key:
+                    _cache_put(key, res)
+                return res
+            except Exception as e:  # noqa: BLE001 — qualquer falha passa para o próximo
+                _count(name, False)
+                log.warning("LLM %s falhou: %s", name, e)
+                errors.append(f"{name}: {e}")
+    finally:
+        _tl.timeout = old_t
     raise LLMError("Nenhum LLM disponível → " + " | ".join(errors))
 
 
 def complete_json(prompt: str, *, system: str | None = None, temperature: float = 0.6,
-                  images: list[bytes] | None = None, retries: int = 2) -> Any:
+                  images: list[bytes] | None = None, retries: int = 2,
+                  required: list[str] | tuple[str, ...] | None = None, cache: bool = True,
+                  timeout: float | None = None) -> Any:
+    """JSON estruturado: modo JSON do provedor + conserto local (cercas ```, texto em volta, vírgula sobrando,
+    resposta cortada). Se ainda vier quebrado ou sem as chaves obrigatórias (required), tenta de novo em OUTRO
+    provedor da fila, com temperatura menor. Respostas válidas ficam no cache curto (prompt idêntico = 0 cota)."""
     last: Exception | None = None
+    bad: set[str] = set()
+    p, temp = prompt, temperature
     for attempt in range(retries + 1):
-        res = complete(prompt, system=system, json_mode=True, temperature=temperature, images=images)
+        res = complete(p, system=system, json_mode=True, temperature=temp, images=images,
+                       exclude=bad, timeout=timeout, cache=cache and attempt == 0)
         try:
-            return parse_json(res.text)
+            data = parse_json(res.text)
+            missing = [k for k in (required or ()) if not (isinstance(data, dict) and data.get(k) not in (None, "", [], {}))]
+            if missing:
+                raise ValueError(f"faltam as chaves {missing}")
+            return data
         except ValueError as e:
             last = e
-            prompt = prompt + "\n\nIMPORTANTE: responda APENAS com JSON válido, sem comentários."
+            log.warning("JSON inválido de %s (tentativa %d): %s", res.provider, attempt + 1, e)
+            if cache and attempt == 0:
+                _cache_drop(_cache_key(prompt, system, True, temperature, images, None))
+            bad.add(res.provider)  # a próxima tentativa vai para o próximo provedor da fila
+            temp = max(0.1, round(temp - 0.15, 2))
+            p = prompt + ("\n\nIMPORTANTE: responda APENAS com um objeto JSON válido e COMPLETO — sem comentários, sem "
+                          "texto antes ou depois, sem cercas ```" + (f", com as chaves {list(required)}" if required else "") + ".")
     raise LLMError(f"JSON inválido do LLM: {last}")
 
 
 def parse_json(text: str) -> Any:
-    text = text.strip()
+    """Lê o JSON da resposta da IA consertando os defeitos comuns: texto em volta, cercas ```, <think>,
+    vírgula sobrando antes de fechar e resposta cortada no meio (limite de tokens)."""
+    text = (text or "").strip().lstrip("﻿")
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+    fence = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.S)
+    if fence and fence.group(1).strip()[:1] in ("{", "["):
+        text = fence.group(1).strip()
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
+    for cand in (text, _balanced(text)):
+        if cand:
+            try:
+                return json.loads(cand, strict=False)
+            except json.JSONDecodeError:
+                pass
+    starts = [i for i in (text.find("{"), text.find("[")) if i >= 0]
+    if not starts:
+        raise ValueError("nenhum JSON encontrado")
+    start = min(starts)
+    body = _balanced(text) or text[start:]
     try:
-        return json.loads(text)
+        return json.loads(re.sub(r",\s*([}\]])", r"\1", body), strict=False)
     except json.JSONDecodeError:
         pass
-    m = re.search(r"(\{.*\}|\[.*\])", text, flags=re.S)
-    if m:
+    rep = _repair_truncated(text[start:])
+    if rep is not None:
+        return rep
+    raise ValueError("JSON inválido mesmo após conserto")
+
+
+def _balanced(text: str) -> str:
+    """Primeiro objeto/lista JSON completo do texto (respeitando strings), ou ''."""
+    starts = [i for i in (text.find("{"), text.find("[")) if i >= 0]
+    if not starts:
+        return ""
+    start = min(starts)
+    stack: list[str] = []
+    in_str = esc = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c in "{[":
+            stack.append("}" if c == "{" else "]")
+        elif c in "}]":
+            if not stack or stack.pop() != c:
+                return ""
+            if not stack:
+                return text[start:i + 1]
+    return ""
+
+
+def _repair_truncated(s: str) -> Any:
+    """JSON cortado no meio: volta até o último item completo e fecha as chaves/colchetes abertos."""
+    stack: list[str] = []
+    in_str = esc = False
+    cuts: list[tuple[int, list[str]]] = []  # pontos seguros para cortar + pilha aberta naquele ponto
+    for i, c in enumerate(s):
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c in "{[":
+            stack.append("}" if c == "{" else "]")
+        elif c in "}]":
+            if stack:
+                stack.pop()
+            cuts.append((i + 1, list(stack)))
+        elif c == ",":
+            cuts.append((i, list(stack)))
+    tries = []
+    if in_str:
+        tries.append(s + '"' + "".join(reversed(stack)))
+    tries.append(s + "".join(reversed(stack)))
+    tries += [s[:pos] + "".join(reversed(st)) for pos, st in reversed(cuts[-60:])]
+    for t in tries:
         try:
-            return json.loads(m.group(1))
-        except json.JSONDecodeError as e:
-            raise ValueError(str(e)) from e
-    raise ValueError("nenhum JSON encontrado")
+            return json.loads(re.sub(r",\s*([}\]])", r"\1", t), strict=False)
+        except json.JSONDecodeError:
+            continue
+    return None
 
 
 def has_vision() -> bool:
