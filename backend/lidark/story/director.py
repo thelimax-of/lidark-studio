@@ -19,6 +19,14 @@ from PIL import Image
 ALLOWED_FX = {"dust", "smoke", "rain", "fire", "embers", "flicker", "candle", "alarm", "flash", "stars", "bubbles",
               "confetti", "night"}
 CENTER_WIDGETS = {"mission", "newspaper", "telegram", "console", "notebook", "alert", "countdown"}
+DEVICE_TYPES = {"tv", "radio", "phone", "comms", "monitor", "newsboy", "proclamation"}
+# um cartão "principal" por vez no centro da tela; os pequenos ficam em cantos fixos (relógio sempre no canto)
+PRIMARY = CENTER_WIDGETS | DEVICE_TYPES | {"map", "chat", "dialogue"}
+PRIORITY = {"dialogue": 3, **{d: 2 for d in DEVICE_TYPES}}
+EST_H = {"mission": 0.24, "newspaper": 0.36, "telegram": 0.22, "console": 0.3, "notebook": 0.32, "alert": 0.24,
+         "countdown": 0.17, "map": 0.36, "chat": 0.32}
+DEFAULT_CY = {"mission": 0.68, "newspaper": 0.5, "telegram": 0.5, "console": 0.58, "notebook": 0.56, "alert": 0.6,
+              "countdown": 0.55, "map": 0.4, "chat": 0.45}
 
 
 def _hm(s: Any) -> int | None:
@@ -105,9 +113,14 @@ def direct(ep: dict[str, Any], visuals: list[dict[str, Any]], lines: list[dict[s
         if typ == "newspaper" and not data.get("name"):
             names = hud.get("paper_names") or ["Gazeta"]
             data["name"] = names[seed % len(names)]
-        if typ == "countdown" and mission.get("hours"):
-            # o número gigante sai do MESMO relógio da missão (nunca contradiz o cronômetro do canto)
-            data["value"] = None
+        if typ == "countdown":
+            if not (mission.get("hours") or mission.get("minutes")):
+                typ = None  # sem prazo definido na missão, número gigante não faz sentido
+            else:  # o número sai do MESMO relógio da missão (nunca contradiz o cronômetro do canto)
+                data = {}
+        dev = b.get("device") if isinstance(b.get("device"), dict) else None
+        if dev and dev.get("type") in DEVICE_TYPES:
+            typ, data = dev["type"], dict(dev.get("data") or {})
         if typ:
             t0 = s0 + (1.0 if (typ == "mission" and i == 0) else 0.05 if typ in ("mission", "newspaper", "alert", "countdown") else 0.15)
             t1 = max(s1, t0 + 2.4) if typ not in ("countdown",) else s1 + 0.2
@@ -116,13 +129,23 @@ def direct(ep: dict[str, Any], visuals: list[dict[str, Any]], lines: list[dict[s
                 sfx.append({"t": t0 + (0.35 if typ == "newspaper" else 0.2), "kind": "impact", "variant": iv, "gain": 0.5})
             if typ in ("phone", "chat"):
                 sfx.append({"t": t0 + 0.15, "kind": "notify", "gain": 0.35})
-            if typ == "radio":
+            if typ in ("radio", "comms"):
                 amb.append({"kind": "static", "t0": t0, "t1": t0 + 0.8})
+            if typ == "comms":  # bipes de abrir/fechar o rádio (estilo controle de missão)
+                sfx.append({"t": max(0.0, ln["start"] - 0.25), "kind": "beep", "gain": 0.22})
+                sfx.append({"t": ln["end"] + 0.05, "kind": "beep", "gain": 0.18})
+            if typ == "phone" and ln["speaker"] == "phone":
+                sfx.append({"t": max(0.0, ln["start"] - 0.2), "kind": "beep", "gain": 0.2})
+            if typ == "radio" and ln["speaker"] == "radio":
+                amb.append({"kind": "crackle", "t0": ln["start"], "t1": ln["end"]})
+            if typ in DEVICE_TYPES:
+                widgets[-1]["t1"] = round(min(max(t1, ln["end"] + 0.35), total), 3)
+                widgets[-1]["device"] = True
             if typ in ("console", "notebook", "telegram"):
                 sfx.append({"t": t0 + 0.3, "t1": min(t1, t0 + 2.6), "kind": "typing"})
         # diálogo: toda fala de personagem ganha caixa com retrato + digitação
         spk = ln["speaker"]
-        if spk not in ("narrador", "narrator", ""):
+        if spk not in ("narrador", "narrator", "") and spk not in DEVICE_TYPES:
             ch = next((c for c in bible.get("characters") or [] if c.get("id") == spk), None)
             por = portraits.get(spk) or {}
             widgets.append({"type": "dialogue", "t0": ln["start"], "t1": round(ln["end"] + 0.35, 3),
@@ -164,30 +187,26 @@ def direct(ep: dict[str, Any], visuals: list[dict[str, Any]], lines: list[dict[s
     widgets.append({"type": "endcard", "t0": round(narration_end - 0.6, 3), "t1": total,
                     "data": {"text": part_label or "CONTINUA…", "sub": ep.get("end_sub", "")}})
     sfx.append({"t": narration_end - 0.4, "kind": "ding", "variant": 1, "gain": 0.32})
-    # ------------------------------------------------------------ colisões: etiqueta (chip) foge do que já está na tela
-    def overlaps(w: dict[str, Any], kinds: set[str]) -> bool:
-        return any(o is not w and o["type"] in kinds and o["t0"] < w["t1"] and o["t1"] > w["t0"] for o in widgets)
-    for w in widgets:
-        if w["type"] != "chip":
-            continue
-        if overlaps(w, {"objectives", "phone", "scoreboard", "inventory"}):
-            w["data"]["y"] = 0.3 if overlaps(w, {"dialogue", "tv", "endcard"}) else (0.62 if not vertical else 0.84)
-        elif overlaps(w, CENTER_WIDGETS) and not vertical:
-            w["data"]["y"] = 0.85
     # ------------------------------------------------------------ relógio
     clock = _clock(ep, beats, L, hud, mission)
-    if clock.get("countdown_min"):
-        from ..render.story_hud import clk_minute
-        for w in widgets:
-            if w["type"] == "countdown" and not w["data"].get("value"):
-                left = max(0, int(clock["countdown_min"] - clk_minute(clock, w["t0"])))
-                w["data"]["value"] = f"{left // 60:02d}:{left % 60:02d}"
-                w["data"].setdefault("label", "HORAS PELA FRENTE")
-    # escurece o fundo quando um cartão central está na tela
+    from ..render.story_hud import clk_minute
+    for w in list(widgets):
+        if w["type"] == "countdown":
+            if not clock.get("countdown_min"):
+                widgets.remove(w)
+                continue
+            left = max(0, int(clock["countdown_min"] - clk_minute(clock, w["t0"])))
+            w["data"] = {"value": f"{left // 60}H" if left >= 120 else f"{left} MIN",
+                         "label": f"RESTAM · {clock.get('mission', '')}"}
+    _layout(widgets, shots, W, H, vertical)
+    # aparelho em tela cheia: o fundo desfoca e escurece; cartão central escurece um pouco
     for sh in shots:
-        cover = sum(max(0.0, min(sh["start"] + sh["dur"], w["t1"]) - max(sh["start"], w["t0"]))
-                    for w in widgets if w["type"] in CENTER_WIDGETS)
-        if cover > sh["dur"] * 0.5:
+        def cover(kinds: set) -> float:
+            return sum(max(0.0, min(sh["start"] + sh["dur"], w["t1"]) - max(sh["start"], w["t0"])) for w in widgets if w["type"] in kinds)
+        if cover(DEVICE_TYPES) > sh["dur"] * 0.4:
+            sh["device"] = True
+            sh["dim"] = max(sh.get("dim", 0.0), 0.45)
+        elif cover(CENTER_WIDGETS) > sh["dur"] * 0.5:
             sh["dim"] = max(sh.get("dim", 0.0), 0.3)
         if any(w["type"] == "dialogue" and w["t0"] < sh["start"] + sh["dur"] and w["t1"] > sh["start"] for w in widgets):
             sh["dim"] = max(sh.get("dim", 0.0), 0.18)
@@ -198,6 +217,61 @@ def direct(ep: dict[str, Any], visuals: list[dict[str, Any]], lines: list[dict[s
             "grade": hud.get("grade", ""), "hud": hud, "shots": shots, "widgets": widgets, "lines": L, "sfx": sfx,
             "ambience": amb, "clock": clock, "music": mood, "climax_at": climax, "fade_in": 0.0,
             "hero_t": round(hero["start"] + hero["dur"] * 0.6, 2)}
+
+
+def _layout(widgets: list, shots: list, W: int, H: int, vertical: bool) -> None:
+    """Sem sobreposição: (1) um principal por vez (diálogo > aparelho > cartão; o outro encurta/atrasa ou sai);
+    (2) o cartão principal escolhe a altura que não cobre o rosto (caixa vinda dos olhos de cada tomada);
+    (3) cantos fixos para os pequenos (objetivos sob o relógio; placar e recursos empilhados à direita)."""
+    prim = sorted([w for w in widgets if w["type"] in PRIMARY], key=lambda w: w["t0"])
+    drop = set()
+    for i, a in enumerate(prim):
+        if id(a) in drop:
+            continue
+        for b in prim[i + 1:]:
+            if id(b) in drop or b["t0"] >= a["t1"]:
+                continue
+            if PRIORITY.get(b["type"], 1) >= PRIORITY.get(a["type"], 1):
+                a["t1"] = round(b["t0"] - 0.05, 3)
+                if a["t1"] - a["t0"] < 1.0:
+                    drop.add(id(a))
+                    break
+            else:
+                b["t0"] = round(a["t1"] + 0.05, 3)
+                if b["t1"] - b["t0"] < 1.0:
+                    drop.add(id(b))
+    widgets[:] = [w for w in widgets if id(w) not in drop]
+    for w in widgets:
+        typ = w["type"]
+        if typ not in EST_H:
+            continue
+        faces = [sh["face"] for sh in shots if sh.get("face") and sh["start"] < w["t1"] and sh["start"] + sh["dur"] > w["t0"]]
+        hh = EST_H[typ] * (1.0 if vertical else 1.6)
+        best, best_ov = None, 1e18
+        for cy in [DEFAULT_CY[typ] if vertical else 0.5, 0.7, 0.32, 0.76, 0.26, 0.5]:
+            top, bot = (cy - hh / 2) * H, (cy + hh / 2) * H
+            if top < 0.1 * H or bot > 0.98 * H:
+                continue
+            ov = sum(max(0.0, min(bot, f[3]) - max(top, f[1])) for f in faces)
+            if ov < best_ov - 1:
+                best, best_ov = cy, ov
+            if ov <= 0:
+                break
+        if best is not None:
+            w["data"]["_cy"] = best
+    for w in widgets:
+        if w["type"] == "inventory" and any(o["type"] == "scoreboard" and o["t0"] < w["t1"] and o["t1"] > w["t0"] for o in widgets):
+            w["data"]["_slot_y"] = 0.065
+    for w in widgets:
+        if w["type"] != "chip":
+            continue
+        busy_top = any(o["type"] in ("objectives", "scoreboard", "inventory") and o["t0"] < w["t1"] and o["t1"] > w["t0"] for o in widgets)
+        prim_now = [o for o in widgets if o["type"] in PRIMARY and o["t0"] < w["t1"] and o["t1"] > w["t0"]]
+        y = 0.3 if busy_top else 0.13
+        for o in prim_now:  # etiqueta nunca em cima do cartão principal
+            if abs(float(o["data"].get("_cy", 0.5)) - y) < 0.2 or o["type"] in DEVICE_TYPES:
+                y = 0.88 if not any(p["type"] == "dialogue" for p in prim_now) else 0.13
+        w["data"]["y"] = y
 
 
 def _clock(ep: dict[str, Any], beats: list[dict[str, Any]], L: list[dict[str, Any]], hud: dict[str, Any],
@@ -340,6 +414,9 @@ def _shot(v: dict[str, Any], framing: str, start: float, dur: float, W: int, H: 
             keys.append([round(dur * rng.uniform(0.5, 0.65), 2), f[0], f[1] + H * 0.05, rng.uniform(1.6, 1.9)])
             sh["impacts"].append(keys[-1][0])
     sh["cam"] = keys
+    fb = _face_box(v, keys, SW, SH, s, W, H)
+    if fb:
+        sh["face"] = fb
     sh["hero"] = 2 if (framing in ("wide", "medium") and _face(v, SW, SH, s, W, H)) else (1 if framing == "wide" else 0)
     return sh
 
@@ -373,3 +450,24 @@ def _face(v: dict[str, Any], SW: float, SH: float, s: float, W: int = 720, H: in
             ex = aw - ex
         return X + (ex - aw / 2) * sc, Y - hh + ey * sc
     return None
+
+
+def _face_box(v: dict[str, Any], keys: list, SW: float, SH: float, s: float, W: int, H: int) -> list | None:
+    """Caixa do rosto no QUADRO (união das chaves de câmera): cabeça ≈ 1,4× a distância entre os olhos para cada lado."""
+    f = _face(v, SW, SH, s, W, H)
+    if not f:
+        return None
+    if v.get("mode") != "layered":
+        (x0, _), (x1, _) = v["bg"]["eyes"]["eyes"]
+        dx = abs(x1 - x0) * s
+    else:
+        c = next(c for c in v.get("chars") or [] if c["asset"].get("eyes"))
+        (x0, _), (x1, _) = c["asset"]["eyes"]["eyes"]
+        n = len(v.get("chars") or [])
+        dx = abs(x1 - x0) * H * float(c.get("h") or (0.6 if n == 1 else 0.52)) / c["asset"]["size"][1]
+    box = None
+    for _, cx, cy, z in keys:
+        fx, fy, r = (f[0] - cx) * z + W / 2, (f[1] - cy) * z + H / 2, 1.4 * dx * z
+        b = [fx - r, fy - r * 1.15, fx + r, fy + r * 0.95]
+        box = b if box is None else [min(box[0], b[0]), min(box[1], b[1]), max(box[2], b[2]), max(box[3], b[3])]
+    return [round(x, 1) for x in box]

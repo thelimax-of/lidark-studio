@@ -31,31 +31,114 @@ def _pct(s: str) -> int:
         return 0
 
 
+# filtros de "aparelho" (FFmpeg) — a voz soa saindo do dispositivo
+DEVICE_AF = {
+    "tv": "highpass=f=180,lowpass=f=6500,aecho=0.8:0.6:28|47:0.16|0.09",
+    "radio": "highpass=f=450,lowpass=f=3000,acompressor=threshold=0.08:ratio=8:attack=5:release=80:makeup=2.5,asoftclip=type=tanh",
+    "phone": "highpass=f=320,lowpass=f=3400,acompressor=threshold=0.1:ratio=6:attack=5:release=60:makeup=2",
+    "comms": "highpass=f=300,lowpass=f=3000,acompressor=threshold=0.1:ratio=6:makeup=2,asoftclip=type=tanh",
+    "newsboy": "aecho=0.8:0.7:70|150:0.22|0.12",
+    "proclamation": "aecho=0.8:0.7:80|170:0.25|0.14",
+}
+
+
+def _gemini_ok_today() -> int:
+    from . import providers
+    led = providers._ledger().get("gemini_tts") or {}
+    from datetime import datetime
+    used = led.get("images", 0) if led.get("day") == datetime.now().strftime("%Y-%m-%d") else 0
+    return max(0, int(providers.conf().get("gemini_tts_daily") or 0) - int(used))
+
+
+def plan_voices(b: dict[str, Any], beats: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Decide o provedor de cada papel para o episódio INTEIRO: Gemini só se a cota do dia cobre todas as falas do
+    papel; senão o papel todo vai de edge (nunca mistura vozes do mesmo personagem num episódio)."""
+    count: dict[str, int] = {}
+    for bt in beats:
+        r = bt.get("speaker", "narrador") or "narrador"
+        count[r] = count.get(r, 0) + 1
+    left = _gemini_ok_today()
+    out = {}
+    for role in sorted(count, key=lambda r: (r != "narrador", count[r])):
+        cfg = B.voice_for(b, role)
+        if cfg.get("provider") == "gemini":
+            if count[role] <= left:
+                left -= count[role]
+            else:
+                cfg = _edge_fallback(b, role, cfg)
+        out[role] = cfg
+    return out
+
+
+def _edge_fallback(b: dict[str, Any], role: str, cfg: dict[str, Any]) -> dict[str, Any]:
+    fb = dict(cfg.get("fallback") or {})
+    if not fb:
+        c = B.character(b, role)
+        base = B.DEFAULT_VOICES.get(role) or (
+            {"voice": c.get("voice"), "rate": c.get("rate"), "pitch": c.get("pitch")} if c else B.DEFAULT_VOICES["narrador"])
+        fb = {k: base.get(k) for k in ("voice", "rate", "pitch")}
+    return {**fb, "provider": "edge", "fallback_from": "gemini"}
+
+
+def _synth_one(text: str, cfg: dict[str, Any], out: Path, emotion: str, narrator: bool) -> None:
+    if cfg.get("provider") == "gemini":
+        style = cfg.get("style") or ""
+        if emotion:
+            style = (style + f". Emoção desta fala: {emotion}").strip(". ")
+        tts._gemini(text, out, cfg.get("voice") or "Charon", style)
+        from . import providers
+        providers.record("gemini_tts", images=1)
+        return
+    de, dp = tts.EMOTION.get(emotion, (0, 0)) if narrator else (0, 0)
+    r = _pct(cfg.get("rate")) + de
+    pitch = cfg.get("pitch") or "+0Hz"
+    try:
+        p0 = int(str(pitch).replace("Hz", "")) + dp
+        pitch = f"{p0:+d}Hz"
+    except ValueError:
+        pass
+    tts._edge(text, out, cfg.get("voice") or "pt-BR-AntonioNeural", f"{r:+d}%", pitch)
+
+
 def synth_lines(ch: Channel, b: dict[str, Any], beats: list[dict[str, Any]], workdir: Path, rate: str = "") -> list[dict[str, Any]]:
-    """Uma faixa por beat: narrador na voz do canal (com emoção por fala), personagens nas vozes da bíblia."""
-    out = []
-    chars = {c["id"]: c for c in b.get("characters") or []}
-    base_rate = _pct(rate or b.get("narrator_rate") or ch.voice_rate)
+    """Uma faixa por beat, na voz do PAPEL (narrador, personagem, aparelho). Aparelhos recebem o filtro de áudio
+    (TV, rádio, celular, rádio de bordo, rua). Papel em Gemini que falhar no meio é refeito INTEIRO em edge."""
+    from ..media import run_ffmpeg
     d = workdir / "voz"
     d.mkdir(parents=True, exist_ok=True)
+    plan = plan_voices(b, beats)
+    paths: dict[int, Path] = {}
+    roles: dict[str, list[int]] = {}
     for i, bt in enumerate(beats):
-        text = bt["text"]
-        spk = bt.get("speaker", "narrador")
-        c = chars.get(spk)
-        emo = str(bt.get("emotion") or "").lower()
-        de, dp = tts.EMOTION.get(emo, (0, 0))
-        if c:
-            voice, r, pitch, provider = c.get("voice") or "pt-BR-FranciscaNeural", _pct(c.get("rate")) + de, c.get("pitch") or "+0Hz", "edge"
-        else:
-            voice, r, pitch, provider = (b.get("narrator_voice") or ch.voice_name or "pt-BR-AntonioNeural"), base_rate + de, f"{dp:+d}Hz", ch.voice_provider or "edge"
-        key = hashlib.sha1(f"{text}|{voice}|{r}|{pitch}|{provider}".encode()).hexdigest()[:12]
-        p = d / f"{i:02d}_{key}.mp3"
-        if not p.exists() or p.stat().st_size < 1000:
-            if provider == "edge" or c:
-                tts._edge(text, p, voice, f"{r:+d}%", pitch)
-            else:
-                tts.synthesize(text, p, provider=provider, voice=voice, rate=f"{r:+d}%", style=ch.voice_style)
-        out.append({"audio": str(p), "dur": round(audio_duration(p), 3), "speaker": spk})
+        roles.setdefault(bt.get("speaker", "narrador") or "narrador", []).append(i)
+    for role, idxs in roles.items():
+        cfg = plan[role]
+        for attempt in range(2):
+            try:
+                for i in idxs:
+                    bt = beats[i]
+                    key = hashlib.sha1(f"{bt['text']}|{json.dumps(cfg, sort_keys=True)}|{bt.get('emotion')}".encode()).hexdigest()[:12]
+                    p = d / f"{i:02d}_{key}.mp3"
+                    if not p.exists() or p.stat().st_size < 1000:
+                        _synth_one(bt["text"], cfg, p, str(bt.get("emotion") or "").lower(), role == "narrador")
+                    paths[i] = p
+                break
+            except Exception as e:  # noqa: BLE001
+                if cfg.get("provider") != "gemini" or attempt:
+                    raise
+                log.warning("Gemini TTS falhou no papel %s (%s) — papel inteiro em edge", role, e)
+                cfg = plan[role] = _edge_fallback(b, role, cfg)
+    out = []
+    for i, bt in enumerate(beats):
+        role = bt.get("speaker", "narrador") or "narrador"
+        p = paths[i]
+        af = DEVICE_AF.get(role)
+        if af:
+            q = p.with_name(p.stem + f"_{role}.wav")
+            if not q.exists():
+                run_ffmpeg(["-i", str(p), "-af", af, "-ar", "48000", "-ac", "1", str(q)])
+            p = q
+        out.append({"audio": str(p), "dur": round(audio_duration(p), 3), "speaker": role, "voice": plan[role]})
     return out
 
 

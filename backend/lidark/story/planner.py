@@ -193,7 +193,8 @@ def resolve(slug: str, b: dict[str, Any], ep: dict[str, Any], pl: dict[str, Any]
             loc = a_main or pick("location", tags)
             chars = []
             for c in want_chars:
-                pz = bank.find(slug, "pose", char=c["id"], pose=c.get("pose", ""), limit=12, recent_eps=None)
+                pz = [p for p in bank.find(slug, "pose", char=c["id"], pose=c.get("pose", ""), limit=12, recent_eps=None)
+                      if p.get("clean")]  # só pose limpa (fundo verde); sem ela, a cena inteira com o personagem
                 exact = [p for p in pz if p.get("pose") == c.get("pose")]
                 if not exact:  # pose pedida não existe: só poses "neutras" (sem objeto na mão, de pé)
                     exact = [p for g in NEUTRAL_POSES for p in pz if p.get("pose") == g]

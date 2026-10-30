@@ -88,17 +88,22 @@ def ingest(slug: str, src: Path | Image.Image, type_: str, *, tags: list[str] | 
                            "source": source, "prompt": prompt[:1500], "seed": seed, "created": time.time(), "uses": 0,
                            "episodes": [], "note": note}
     if type_ == "pose":
-        rgba = cutout.cutout(img)
+        res = cutout.cutout(img)
+        if res is None:  # sem fundo verde: recorte grosseiro NUNCA entra no banco de poses (fica "colado" no vídeo)
+            return {"rejected": ["pose sem fundo verde (chroma key) — recorte limpo impossível"]}
+        rgba = res[0]
         ok, why, _ = cutout.validate_pose(rgba, need_eyes=need_eyes)
         if not ok:
             return {"rejected": why}
         cut, bb = cutout.trim(rgba)
         eyes = cutout.detect_eyes(cut.convert("RGB"), cut.getchannel("A")) if need_eyes else None
         cutout.save_rgba(cut, d / f"{aid}.png")
-        rec.update(file=f"assets/{type_}/{aid}.png", size=list(cut.size), eyes=eyes, orientation=_orient(cut.size))
+        rec.update(file=f"assets/{type_}/{aid}.png", size=list(cut.size), eyes=eyes, orientation=_orient(cut.size), clean=True)
     elif type_ == "prop":
-        rgba = cutout.cutout(img)
-        cut, _ = cutout.trim(rgba)
+        res = cutout.cutout(img)
+        if res is None:
+            return {"rejected": ["objeto sem fundo verde"]}
+        cut, _ = cutout.trim(res[0])
         cutout.save_rgba(cut, d / f"{aid}.png")
         rec.update(file=f"assets/{type_}/{aid}.png", size=list(cut.size), orientation=_orient(cut.size))
     elif type_ == "portrait":
@@ -134,16 +139,12 @@ def add_portrait_from(slug: str, asset: dict[str, Any]) -> dict[str, Any] | None
     e = asset.get("eyes")
     if not e:
         return None
-    src = Image.open(file_path(slug, asset.get("fg") or asset["file"])).convert("RGBA")
+    src = Image.open(file_path(slug, asset["file"])).convert("RGBA")
     (x0, y0), (x1, y1) = e["eyes"]
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     side = max(120, abs(x1 - x0) * 4.4)
     box = (int(cx - side / 2), int(cy - side * 0.5), int(cx + side / 2), int(cy + side * 0.5))
-    crop = src.crop(box)
-    bg = Image.new("RGBA", crop.size, (0, 0, 0, 0))
-    if asset["type"] == "scene":  # retrato de cena: fundo original atrás
-        bg = Image.open(file_path(slug, asset["file"])).convert("RGBA").crop(box)
-    bg.alpha_composite(crop)
+    bg = src.crop(box)
     rec = ingest(slug, bg, "portrait", tags=asset.get("tags", []), char=asset.get("char", ""), pose=asset.get("pose", ""),
                  source=f"from:{asset['id']}")
     if rec and not rec.get("rejected"):
@@ -247,7 +248,7 @@ PROTO = [  # arquivo, tipo, personagem, pose, tags
     ("candle_22", "scene", "ze", "sitting", ["noite", "vela", "1904", "casa", "escuro", "calmo"]),
     ("maria_lucid-origin", "portrait", "maria", "front", ["vizinha", "maria", "1904"]),
 ]
-# poses recortadas a partir das cenas (personagem sobre fundo de outra cena = camadas de verdade)
+# (não usado) recortes de cena por IA ficam com borda ruim — poses só nascem de geração em fundo verde
 PROTO_POSES = [("rubble_33", "front"), ("paper_33", "reading"), ("window_11", "arms_up"), ("candle_22", "sitting"),
                ("rubble_44", "worried"), ("paper_11", "back"), ("rubble_22", "back_walk")]
 
@@ -267,7 +268,7 @@ def seed_prototype(slug: str = "ouro-do-passado", src_dir: Path = PROTO_DIR) -> 
                 e = cutout.detect_eyes(Image.open(p).convert("RGB"))
                 if e:
                     _set(slug, rec["id"], eyes=e)
-    for name, pose in PROTO_POSES:
+    for name, pose in ([] if True else PROTO_POSES):  # recortes de cena NÃO viram pose (borda ruim) — só fundo verde
         p = src_dir / f"{name}.png"
         if not p.exists() or f"proto-pose:{name}" in have:
             continue
@@ -279,8 +280,8 @@ def seed_prototype(slug: str = "ouro-do-passado", src_dir: Path = PROTO_DIR) -> 
             added.append(rec["id"])
     # retrato do Zé para a caixa de diálogo
     if not any(a["type"] == "portrait" and a.get("char") == "ze" for a in load(slug)):
-        for a in load(slug):
-            if a["type"] == "pose" and a.get("char") == "ze" and a.get("eyes"):
+        for a in sorted(load(slug), key=lambda x: x.get("note") != "proto:rubble_33"):
+            if a["type"] == "scene" and a.get("char") == "ze" and a.get("eyes") and a.get("pose") == "front":
                 r = add_portrait_from(slug, a)
                 if r and not r.get("rejected"):
                     added.append(r["id"])

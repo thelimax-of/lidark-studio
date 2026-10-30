@@ -142,6 +142,12 @@ class Hud:
         base.alpha_composite(fade(card, a), (int(x), int(y)))
 
 
+def place(h: Hud, data: dict[str, Any], default_center: float, height: float) -> float:
+    """Topo (px) de um cartão: o diretor pode mandar data["_cy"] (centro em fração da altura) para fugir do rosto."""
+    cy = float(data.get("_cy", default_center))
+    return max(h.s(120), min(h.H - height - h.s(16), cy * h.H - height / 2))
+
+
 # ================================================================ ícones desenhados (fontes não têm ◷ ◎)
 
 def icon(d: ImageDraw.ImageDraw, kind: str, x: float, y: float, r: float, color: tuple) -> None:
@@ -273,7 +279,7 @@ def mission(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, An
         c.alpha_composite(p, (0, h.s(56)))
         return shadowed(c)
     cd = h.cached(("mission", title, sub, lab), card)
-    y = (h.H * 0.56 if h.vertical else h.H * 0.3) + (1 - a) * h.s(40)
+    y = place(h, data, 0.56 + 0.12 if h.vertical else 0.45, cd.height) + (1 - a) * h.s(40)
     h.put(base, cd, (h.W - cd.width) / 2, y, a)
 
 
@@ -366,7 +372,7 @@ def newspaper(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, 
         r = r.resize((max(1, int(r.width * s)), max(1, int(r.height * s))), Image.BILINEAR)
         return shadowed(r, blur=10)
     r = h.cached(("paperfx", name, h1, h2, sub, date, q), posed)
-    h.put(base, r, (h.W - r.width) / 2, (h.H * 0.5 if h.vertical else h.H * 0.5) - r.height / 2, out)
+    h.put(base, r, (h.W - r.width) / 2, place(h, data, 0.5, r.height), out)
 
 
 def telegram(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, Any]) -> None:
@@ -390,7 +396,7 @@ def telegram(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, A
         d.text((h.s(28), h.s(56) + i * h.s(38)), ln, font=fw, fill=h.ink)
     _paper_texture(c)
     c = shadowed(c.rotate(-2, expand=True, resample=Image.BICUBIC), blur=8)
-    h.put(base, c, (h.W - c.width) / 2, h.H * 0.42 + (1 - a) * h.s(30), a)
+    h.put(base, c, (h.W - c.width) / 2, place(h, data, 0.5, c.height) + (1 - a) * h.s(30), a)
 
 
 def console(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, Any]) -> None:
@@ -414,7 +420,7 @@ def console(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, An
         s = ln[:int(len(ln) * min(1, k * 1.4))]
         col = h.danger if any(w in ln for w in ("ALERTA", "FALHA", "PERIGO", "!")) else (180, 230, 255)
         d.text((h.s(20), h.s(62) + i * h.s(36)), "> " + s, font=fw, fill=col)
-    h.put(base, c, (h.W - W) / 2, h.H * (0.5 if h.vertical else 0.45), a)
+    h.put(base, c, (h.W - W) / 2, place(h, data, 0.58 if h.vertical else 0.5, c.height), a)
 
 
 def notebook(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, Any]) -> None:
@@ -441,7 +447,7 @@ def notebook(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, A
             break
         d.text((h.s(78), h.s(98) + i * h.s(46)), ln[:int(len(ln) * min(1, k))], font=fh, fill=(40, 50, 70))
     c = shadowed(c.rotate(1.5, expand=True, resample=Image.BICUBIC), blur=8)
-    h.put(base, c, (h.W - c.width) / 2, h.H * 0.45 + (1 - a) * h.s(40), a)
+    h.put(base, c, (h.W - c.width) / 2, place(h, data, 0.56, c.height) + (1 - a) * h.s(40), a)
 
 
 def radio(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, Any]) -> None:
@@ -500,7 +506,7 @@ def scoreboard(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str,
         d.text((mid + h.s(150), h.s(32)), away, font=f, fill=h.text, anchor="lm")
         return c
     cd = h.cached(key, card)
-    h.put(base, cd, (h.W - cd.width) / 2, h.s(130 if h.vertical else 24) - (1 - a) * h.s(40), a)
+    h.put(base, cd, h.W - cd.width - h.s(24), h.s(28) + float(data.get("_slot_y", 0)) * h.H - (1 - a) * h.s(40), a)
 
 
 def tv(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, Any]) -> None:
@@ -562,7 +568,7 @@ def chat(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, Any])
     a = 1 - ease((lt - (dur - 0.3)) / 0.3)
     per = max(0.5, (dur - 0.6) / max(1, len(msgs)))
     fb = h.F("ui", 21)
-    y = h.H * (0.3 if h.vertical else 0.25)
+    y = place(h, data, 0.45 if h.vertical else 0.4, h.s(110) * len(msgs))
     for i, m in enumerate(msgs):
         k = ease((lt - 0.2 - i * per) / 0.25)
         if k <= 0:
@@ -642,7 +648,7 @@ def map_card(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, A
         d.rounded_rectangle((W / 2 - tw / 2 - h.s(12), h.s(14), W / 2 + tw / 2 + h.s(12), h.s(50)), h.s(8), fill=h.ink + (230,))
         d.text((W / 2, h.s(32)), label.upper(), font=f, fill=h.paper, anchor="mm")
     c = shadowed(c.rotate(-3, expand=True, resample=Image.BICUBIC), blur=8)
-    h.put(base, c, h.W - c.width - h.s(10) + (1 - a) * h.s(80), h.H * (0.2 if h.vertical else 0.15), a)
+    h.put(base, c, h.W - c.width - h.s(10) + (1 - a) * h.s(80), place(h, data, 0.4 if h.vertical else 0.45, c.height), a)
 
 
 def inventory(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, Any]) -> None:
@@ -671,7 +677,7 @@ def inventory(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, 
         d.rounded_rectangle((h.s(14), y + h.s(26), W - h.s(14), y + h.s(38)), h.s(5), fill=(255, 255, 255, 40))
         col = h.danger if frac < 0.25 else h.accent
         d.rounded_rectangle((h.s(14), y + h.s(26), h.s(14) + max(h.s(10), (W - h.s(28)) * frac), y + h.s(38)), h.s(5), fill=col)
-    h.put(base, c, h.W - W - h.s(24) + (1 - a) * h.s(60), h.s(28) if h.vertical else h.s(22), a)
+    h.put(base, c, h.W - W - h.s(24) + (1 - a) * h.s(60), h.s(28) + float(data.get("_slot_y", 0)) * h.H, a)
 
 
 def alert(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, Any]) -> None:
@@ -698,7 +704,7 @@ def alert(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, Any]
     s = back(min(1.0, (lt - 0.15) / 0.35)) if lt < 0.6 else 1.0
     if abs(s - 1) > 0.01 and s > 0:
         cd = cd.resize((max(1, int(cd.width * s)), max(1, int(cd.height * s))), Image.BILINEAR)
-    h.put(base, cd, (h.W - cd.width) / 2, h.H * 0.42 - cd.height / 2 + h.s(60), a)
+    h.put(base, cd, (h.W - cd.width) / 2, place(h, data, 0.6 if h.vertical else 0.5, cd.height), a)
 
 
 def countdown(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, Any]) -> None:
@@ -710,7 +716,7 @@ def countdown(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, 
     f = h.F("title", 150 * max(0.3, s))
     d = ImageDraw.Draw(base, "RGBA")
     al = int(255 * a)
-    cy = h.H * (0.48 if h.vertical else 0.45)
+    cy = place(h, data, 0.55 if h.vertical else 0.45, 0) - h.s(30)
     d.text((h.W / 2, cy), val, font=f, fill=h.accent[:3] + (al,), anchor="mm", stroke_width=h.s(5), stroke_fill=h.ink + (al,))
     if lab:
         d.text((h.W / 2, cy + h.s(100)), lab, font=fit(lab, h.f_ui, h.W - h.s(80), h.s(26)), fill=h.text[:3] + (al,), anchor="mm",

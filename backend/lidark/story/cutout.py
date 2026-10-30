@@ -72,31 +72,34 @@ def green_ratio(img: Image.Image) -> float:
 
 
 def chroma_key(img: Image.Image) -> Image.Image:
+    """Fundo verde → RGBA com borda suave (2-3 px de feather) e sem franja verde (despill total na borda)."""
     a = np.asarray(img.convert("RGB")).astype(np.float32)
     r, g, b = a[..., 0], a[..., 1], a[..., 2]
     mx = np.maximum(r, b)
     spill = g - mx  # quanto o verde passa dos outros canais
-    alpha = 1 - np.clip((spill - 35) / 55, 0, 1)
+    alpha = 1 - np.clip((spill - 30) / 50, 0, 1)
     alpha[(g > 150) & (r < 120) & (b < 120)] = 0
-    # despill: puxa o verde das bordas para o nível dos outros canais
-    g2 = np.where(spill > 0, mx + np.clip(spill, 0, None) * 0.15, g)
-    out = np.dstack([r, g2, b, alpha * 255]).clip(0, 255).astype(np.uint8)
-    im = Image.fromarray(out, "RGBA")
-    al = im.getchannel("A").filter(ImageFilter.MinFilter(3)).filter(ImageFilter.GaussianBlur(0.7))
-    im.putalpha(al)
-    return im
+    im_a = Image.fromarray((alpha * 255).astype(np.uint8)).filter(ImageFilter.MinFilter(3)).filter(ImageFilter.GaussianBlur(1.3))
+    al = np.asarray(im_a).astype(np.float32) / 255
+    # despill: verde nunca passa do maior dos outros canais (na borda e nos reflexos)
+    g2 = np.where(spill > 0, mx + np.clip(spill, 0, None) * np.clip(al - 0.85, 0, 1), g)
+    out = np.dstack([r, g2, b, al * 255]).clip(0, 255).astype(np.uint8)
+    return Image.fromarray(out, "RGBA")
 
 
-def cutout(img: Image.Image) -> Image.Image:
-    """RGBA do personagem/objeto: chroma key se o fundo é verde, senão recorte por IA."""
+def cutout(img: Image.Image, allow_matte: bool = False) -> tuple[Image.Image, str] | None:
+    """RGBA do personagem/objeto. Só o chroma key (pose gerada em fundo verde) dá borda limpa o bastante para
+    compor por cima de outro fundo; o recorte por IA (u2netp) fica só para usos internos (allow_matte)."""
     if green_ratio(img) > 0.6:
         im = chroma_key(img)
         cov = float(np.mean(np.asarray(im.getchannel("A")) > 128))
         if 0.03 < cov < 0.8:
-            return im
+            return im, "chroma"
+    if not allow_matte:
+        return None
     rgba = img.convert("RGBA")
     rgba.putalpha(matte(img))
-    return rgba
+    return rgba, "matte"
 
 
 def trim(rgba: Image.Image, pad: int = 4) -> tuple[Image.Image, tuple[int, int, int, int]]:

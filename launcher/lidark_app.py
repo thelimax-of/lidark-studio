@@ -96,6 +96,15 @@ class Api:
     def is_fullscreen(self) -> bool:
         return self._fs
 
+    def open_external(self, url: str) -> None:
+        """Abre no navegador do sistema. O Google bloqueia login (OAuth) dentro de janelas embutidas (WebView2),
+        então o "Conectar canal" precisa sair do app; o app minimiza para o navegador aparecer na frente."""
+        import webbrowser
+        if self._fs:
+            self.toggle_fullscreen()
+        self._win.minimize()
+        webbrowser.open(url)
+
 
 def set_icon(window) -> None:
     """Ícone do Lidark na janela/barra de tarefas (WinForms via pythonnet)."""

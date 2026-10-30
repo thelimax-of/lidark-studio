@@ -119,7 +119,6 @@ def job_story_episode(ctx: JobContext) -> dict:
     p = ctx.payload
     fmt = p.get("format") or "short"
     from .. import variety
-    from ..pipeline import _check_claims
     arc = None if (p.get("new_arc") or p.get("topic")) else writer.open_arc(ch.slug)
     idea = None
     iid = p.get("idea_id") or ctx.ref_id
@@ -147,7 +146,7 @@ def job_story_episode(ctx: JobContext) -> dict:
         sc = Script(channel_id=ch.id, idea_id=idea.id if idea else None, format=fmt, title=(ep.get("title") or "Episódio")[:200],
                     hook=ep["beats"][0]["text"], scenes=ep["beats"], description=ep.get("description") or "",
                     tags=ep.get("tags") or [], hashtags=ep.get("hashtags") or [], thumbnail_text=ep.get("thumbnail_text") or "",
-                    sources=(idea.sources if idea else []), variety=var, status="approved")
+                    sources=(idea.sources if idea and idea.sources else ep.get("sources") or []), variety=var, status="approved")
         s.add(sc)
         if idea and idea.status in ("new", "approved"):
             db_idea = s.get(Idea, idea.id)
@@ -156,7 +155,7 @@ def job_story_episode(ctx: JobContext) -> dict:
         s.commit()
         s.refresh(sc)
     ctx.update(0.55, "Checando os fatos frase por frase")
-    _check_claims(ch, sc.id, ctx)
+    check_story_claims(ch, sc.id, idea, ctx.log)
     arc_id = (arc or {}).get("id") or f"arc_{int(time.time())}"
     writer.record_part(ch.slug, arc_id, {
         "n": ep["part"], "script_id": sc.id, "title": ep.get("title"), "summary": ep.get("memory") or "",
@@ -167,6 +166,56 @@ def job_story_episode(ctx: JobContext) -> dict:
     nxt = {k: p[k] for k in ("auto_render", "publish_at") if p.get(k)}
     enqueue("story_assets", title=f"Imagens: {sc.title}", channel_id=ch.id, ref_id=sc.id, payload=nxt)
     return {"script_id": sc.id, "part": ep["part"]}
+
+
+
+
+def check_story_claims(ch: Channel, script_id: int, idea: Idea | None, log=print) -> dict:
+    """Checagem frase a frase só nas falas FACTUAIS (narrador e aparelhos: jornal, rádio, edital...). Falas de
+    personagens ficcionais são moldura e não são "corrigidas" (antes o checador trocava "Dona Maria" por "alguém").
+    A chamada final (segue/siga) é preservada mesmo quando a frase do gancho é corrigida."""
+    import re
+    from .. import content
+    with session() as s:
+        sc = s.get(Script, script_id)
+    chars = {c["id"] for c in B.load(ch.slug).get("characters") or []}
+    idx = [i for i, b in enumerate(sc.scenes or []) if b.get("speaker", "narrador") not in chars]
+    if not idx:
+        return {}
+    tmp = Script(channel_id=sc.channel_id, title=sc.title, scenes=[sc.scenes[i] for i in idx], variety=sc.variety,
+                 sources=sc.sources)
+    try:
+        r = content.check_claims(ch, tmp, idea)
+    except Exception as e:  # noqa: BLE001
+        log(f"Checagem frase a frase não rodou ({e}) — revise os fatos")
+        return {}
+    scenes = [dict(x) for x in sc.scenes]
+    cta = re.compile(r"\b(segue|siga|inscreva|se inscreve)\b", re.I)
+    fixed = []
+    if r.get("sources", 0) >= 2:  # sem fontes de verdade, "corrigir" só estraga o texto
+        for k, txt in r["fixes"].items():
+            i = idx[k]
+            old = scenes[i].get("text", "")
+            cta_s = [x for x in re.split(r"(?<=[.!?…])\s+", old) if cta.search(x)]
+            if cta_s and not cta.search(txt):
+                txt = (txt.rstrip() + " " + " ".join(cta_s)).strip()
+            scenes[i] = {**scenes[i], "text": txt}
+            fixed.append(i + 1)
+    items = r["items"]
+    for c in items:  # número da cena no roteiro inteiro
+        if isinstance(c.get("scene"), int) and 1 <= c["scene"] <= len(idx):
+            c["scene"] = idx[c["scene"] - 1] + 1
+    bad = [c for c in items if c.get("verdict") in ("sem_fonte", "contradiz")]
+    with session() as s:
+        db = s.get(Script, script_id)
+        db.scenes = scenes
+        db.claims = {"sig": content.scenes_sig(scenes), "items": items, "fixed": len(fixed),
+                     "unresolved": [c for c in bad if c.get("scene") not in fixed], "sources": r.get("sources", 0)}
+        s.add(db)
+        s.commit()
+    log(f"Fatos: {len(items) - len(bad)}/{len(items)} confirmados nas fontes ({r.get('sources', 0)} fontes)"
+        + (f" · cenas corrigidas: {fixed}" if fixed else ""))
+    return r
 
 
 @handler("story_assets")

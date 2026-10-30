@@ -65,6 +65,7 @@ CONF_DEFAULTS: dict[str, Any] = {
     "cf_costs": {},             # sobrescreve DEFAULT_COSTS
     "new_images_short": [12, 16],  # alvo de imagens NOVAS por Short quando há capacidade
     "new_images_long_per_min": 6,
+    "gemini_tts_daily": 5,       # falas/dia que a cota grátis do Gemini TTS aguenta (deu 429 depois de ~5)
 }
 SECRET = {"hf_token", "pollinations_token"}
 

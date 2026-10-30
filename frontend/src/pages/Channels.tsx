@@ -3,12 +3,13 @@ import { Plus, MonitorPlay as Youtube, Users, Eye, PlaySquare, Loader2, Link2, S
 import { api, useApi, type Channel } from '../api'
 import { act, fmtNum, PageHeader, Skeleton, toast, useChannel } from '../ui'
 import { FocusPicker } from './FocusMode'
+import { openExternal } from '../components/desktop'
 
 export async function connectYoutube(channelId?: number) {
   const r: any = await act(() => api(`/youtube/connect${channelId ? `?channel_id=${channelId}` : ''}`, { body: {} }))
   if (r?.auth_url) {
-    window.open(r.auth_url, '_blank', 'width=520,height=720')
-    toast.info('Escolha o canal na janela do Google. Ele aparece aqui sozinho quando terminar.')
+    openExternal(r.auth_url)
+    toast.info('Escolha o canal no navegador que abriu. Depois volte aqui: ele aparece sozinho quando terminar.')
   }
 }
 

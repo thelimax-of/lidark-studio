@@ -61,7 +61,8 @@ DEFAULTS: dict[str, dict[str, Any]] = {
                 ["Gazeta do Povo Carioca", "Correio da Rua", "Folha do Largo", "O Mensageiro Popular"],
                 "clock": "date", "grade": "sepia",
                 "widgets": ["mission", "objectives", "newspaper", "dialogue", "highlight", "alert", "countdown", "map",
-                            "inventory", "telegram", "chip", "endcard"]},
+                            "inventory", "telegram", "chip", "endcard"],
+                "devices": ["newsboy", "proclamation"]},
         "missions": ["SOBREVIVA 72H", "CHEGUE AO PORTO", "ATRAVESSE A CIDADE", "ENTREGUE A CARTA", "PROTEJA A FAMÍLIA",
                      "ESCAPE ANTES DO TOQUE DE RECOLHER", "DESCUBRA O QUE ACONTECEU"],
         "locations": ["narrow cobblestone street with old townhouses", "simple rented room with a wooden bed and a window",
@@ -94,7 +95,8 @@ DEFAULTS: dict[str, dict[str, Any]] = {
                 "font_type": "ChakraPetch-Bold.ttf", "font_paper": "Exo2.ttf", "paper_names": ["CONSOLE DE MISSÃO"],
                 "clock": "met", "grade": "cool",
                 "widgets": ["mission", "objectives", "console", "dialogue", "highlight", "alert", "countdown", "inventory",
-                            "phone", "tv", "chip", "endcard"]},
+                            "chip", "endcard"],
+                "devices": ["comms", "tv", "phone"]},
         "missions": ["VOLTE PARA CASA", "MANTENHA O SINAL", "POUSE COM SEGURANÇA", "CONSERTE A NAVE", "ECONOMIZE OXIGÊNIO",
                      "CHEGUE À ÓRBITA"],
         "locations": ["cramped spacecraft cabin with switches and round windows", "mission control room with rows of consoles",
@@ -127,8 +129,9 @@ DEFAULTS: dict[str, dict[str, Any]] = {
                 "paper": "#f0e6c8", "font_title": "Anton-Regular.ttf", "font_ui": "Oswald.ttf", "font_type": "SpecialElite.ttf",
                 "font_paper": "PlayfairDisplay.ttf", "paper_names": ["Folha do Gramado", "O Arquibancada", "Diário da Bola"],
                 "clock": "match", "grade": "warm",
-                "widgets": ["mission", "scoreboard", "radio", "newspaper", "dialogue", "highlight", "alert", "countdown",
-                            "objectives", "chip", "endcard"]},
+                "widgets": ["mission", "scoreboard", "newspaper", "dialogue", "highlight", "alert", "countdown",
+                            "objectives", "chip", "endcard"],
+                "devices": ["radio", "tv"]},
         "missions": ["NÃO PERCA O LANCE", "CHEGUE AO ESTÁDIO", "ENTREGUE A BOLA", "SOBREVIVA AOS 90 MINUTOS",
                      "DESCUBRA O SEGREDO DO TIME"],
         "locations": ["packed old stadium stands", "grass pitch seen from the touchline", "old radio booth above the stands",
@@ -161,13 +164,31 @@ DEFAULTS: dict[str, dict[str, Any]] = {
                 "font_type": "SpecialElite.ttf", "font_paper": "Nunito.ttf", "paper_names": ["CADERNO DE LABORATÓRIO"],
                 "clock": "lab", "grade": "clean",
                 "widgets": ["mission", "objectives", "notebook", "dialogue", "highlight", "alert", "countdown", "inventory",
-                            "phone", "chat", "chip", "endcard"]},
+                            "chip", "endcard"],
+                "devices": ["monitor", "phone", "tv"]},
         "missions": ["SOBREVIVA À COZINHA", "AGUENTE 24H SEM DORMIR", "ATRAVESSE O CORPO", "DESCUBRA O VENENO",
                      "ESFRIE A BEBIDA EM 5 MIN"],
         "locations": ["giant kitchen counter seen from a tiny perspective", "inside the human body with red blood vessels",
                       "bright school laboratory bench", "bedroom at night with a glowing phone", "supermarket aisle"],
     },
 }
+
+# Vozes por PAPEL (narrador, cada personagem, aparelhos). provider: edge (ilimitado) | gemini (melhor, com "style",
+# cota grátis curta). O provedor é escolhido UMA vez por episódio e papel (nunca mistura no mesmo papel).
+# Personagem sem entrada aqui usa voice/pitch/rate da própria ficha.
+DEFAULT_VOICES: dict[str, dict[str, Any]] = {
+    "narrador": {"provider": "edge", "voice": "pt-BR-AntonioNeural", "rate": "-4%", "pitch": "-8Hz",
+                 "style": "Narrador brasileiro de série de suspense, voz grave e próxima, ritmo firme"},
+    "tv": {"provider": "edge", "voice": "pt-BR-FranciscaNeural", "rate": "+6%", "pitch": "+0Hz", "style": "Âncora de telejornal em plantão urgente"},
+    "radio": {"provider": "edge", "voice": "pt-BR-AntonioNeural", "rate": "+16%", "pitch": "+6Hz", "style": "Locutor de rádio esportivo empolgado"},
+    "phone": {"provider": "edge", "voice": "pt-BR-ThalitaMultilingualNeural", "rate": "+4%", "pitch": "+0Hz", "style": "Mensagem de voz gravada no celular"},
+    "comms": {"provider": "edge", "voice": "pt-BR-AntonioNeural", "rate": "+2%", "pitch": "-2Hz", "style": "Controle de missão falando pelo rádio, calmo e técnico"},
+    "newsboy": {"provider": "edge", "voice": "pt-BR-AntonioNeural", "rate": "+12%", "pitch": "+26Hz", "style": "Menino jornaleiro gritando na rua"},
+    "proclamation": {"provider": "edge", "voice": "pt-BR-AntonioNeural", "rate": "-6%", "pitch": "-14Hz", "style": "Arauto lendo um edital oficial em voz alta"},
+}
+DEVICE_ROLES = {"tv", "radio", "phone", "comms", "newsboy", "proclamation", "monitor"}
+for _b in DEFAULTS.values():
+    _b["voices"] = copy.deepcopy(DEFAULT_VOICES)
 
 GENERIC = copy.deepcopy(DEFAULTS["ouro-do-passado"])
 GENERIC.update(series_title="Missão", premise="Histórias em série com fatos reais e um protagonista ficcional.",
@@ -186,6 +207,7 @@ def load(slug: str) -> dict[str, Any]:
             saved = json.loads(p.read_text(encoding="utf-8"))
             base.update(saved)
             base["hud"] = {**(DEFAULTS.get(slug, GENERIC).get("hud") or {}), **(saved.get("hud") or {})}
+            base["voices"] = {**DEFAULT_VOICES, **(saved.get("voices") or {})}
         except ValueError:
             pass
     base["slug"] = slug
@@ -193,7 +215,7 @@ def load(slug: str) -> dict[str, Any]:
 
 
 def save(slug: str, data: dict[str, Any]) -> dict[str, Any]:
-    allowed = set(DEFAULTS["ouro-do-passado"]) | {"enabled", "share", "notes"}
+    allowed = set(DEFAULTS["ouro-do-passado"]) | {"enabled", "share", "notes", "voices", "max_parts"}
     with _lock:
         cur = load(slug)
         for k, v in data.items():
@@ -231,3 +253,15 @@ def scene_prompt(b: dict[str, Any], desc: str, chars: list[dict[str, Any]]) -> s
 def prop_prompt(b: dict[str, Any], desc: str) -> str:
     return (f"{b['style']}. A single object: {desc}. Centered, isolated on a flat solid pure green #00ff00 background, "
             "no text, no signature, no watermark")
+
+
+def voice_for(b: dict[str, Any], role: str) -> dict[str, Any]:
+    """Configuração de voz de um papel (narrador, id de personagem ou aparelho)."""
+    v = (b.get("voices") or {}).get(role)
+    if v:
+        return dict(v)
+    c = character(b, role)
+    if c:
+        return {"provider": c.get("provider", "edge"), "voice": c.get("voice") or "pt-BR-FranciscaNeural",
+                "rate": c.get("rate") or "+0%", "pitch": c.get("pitch") or "+0Hz", "style": c.get("style", "")}
+    return dict(DEFAULT_VOICES.get(role) or DEFAULT_VOICES["narrador"])

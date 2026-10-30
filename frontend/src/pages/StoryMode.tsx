@@ -19,7 +19,11 @@ type Asset = { id: string; type: string; char: string; pose: string; tags: strin
   url: string; has_eyes: boolean; disabled?: boolean; created: number }
 type Character = { id: string; name: string; role: string; desc: string; voice: string; pitch: string; rate: string; seed: number; eyes?: string }
 type Bible = { series_title: string; premise: string; style: string; era: string; palette: string[]; characters: Character[]; poses: string[]
-  missions: string[]; locations: string[]; enabled?: boolean; share?: number; hud: Record<string, any>; max_parts?: number }
+  missions: string[]; locations: string[]; enabled?: boolean; share?: number; hud: Record<string, any>; max_parts?: number
+  voices?: Record<string, Voice> }
+type Voice = { provider: 'edge' | 'gemini'; voice: string; rate?: string; pitch?: string; style?: string }
+const ROLE_NAMES: Record<string, string> = { narrador: 'Narrador', tv: 'TV (âncora)', radio: 'Rádio (locutor)', phone: 'Celular (áudio)',
+  comms: 'Rádio de bordo', newsboy: 'Jornaleiro', proclamation: 'Edital (arauto)' }
 type Episode = { script_id: number; title: string; part: number; arc: string; mission: string; style: string; beats: number; words: number
   status: string; created_at: string
   video: { id: number; status: string; path: string; thumbnail: string; duration: number; qa?: boolean
@@ -247,6 +251,25 @@ function BibleEditor({ cid }: { cid: number }) {
         <Field label="Poses do banco (vírgula)"><input className="input" value={b.poses.join(', ')} onChange={e => set('poses', e.target.value.split(',').map(s => s.trim()).filter(Boolean))} /></Field>
         <Field label="Cenários recorrentes (um por linha, em inglês)"><textarea className="input min-h-[90px]" value={b.locations.join('\n')} onChange={e => set('locations', e.target.value.split('\n').map(s => s.trim()).filter(Boolean))} /></Field>
         <Field label="Cor de destaque do HUD"><input className="input" value={b.hud?.accent ?? ''} onChange={e => set('hud', { ...b.hud, accent: e.target.value })} /></Field>
+      </div>
+      <div className="px-4 pb-4">
+        <div className="card-title mb-1">Vozes por papel</div>
+        <div className="text-[12px] text-muted mb-2">O provedor vale para o episódio inteiro de cada papel: se a cota do Gemini não cobrir todas as falas do papel, ele vai todo em edge (nunca mistura). Aparelhos recebem filtro de som (TV, rádio, celular, rua).</div>
+        <div className="space-y-2">
+          {[...Object.keys(ROLE_NAMES).filter(r => r === 'narrador' || (b.hud?.devices ?? []).includes(r)), ...b.characters.map(c => c.id)].map(role => {
+            const v: Voice = b.voices?.[role] ?? { provider: 'edge', voice: b.characters.find(c => c.id === role)?.voice ?? '', rate: b.characters.find(c => c.id === role)?.rate, pitch: b.characters.find(c => c.id === role)?.pitch }
+            const setV = (k: keyof Voice, val: string) => set('voices', { ...(b.voices ?? {}), [role]: { ...v, [k]: val } })
+            return (
+              <div key={role} className="grid gap-2 md:grid-cols-[140px_100px_1fr_80px_80px_1.4fr] items-center">
+                <div className="text-[13px]">{ROLE_NAMES[role] ?? b.characters.find(c => c.id === role)?.name ?? role}</div>
+                <select className="input" value={v.provider} onChange={e => setV('provider', e.target.value)}><option value="edge">edge</option><option value="gemini">gemini</option></select>
+                <input className="input" value={v.voice} placeholder={v.provider === 'gemini' ? 'Charon, Puck…' : 'pt-BR-AntonioNeural'} onChange={e => setV('voice', e.target.value)} />
+                <input className="input" value={v.rate ?? ''} placeholder="-4%" onChange={e => setV('rate', e.target.value)} />
+                <input className="input" value={v.pitch ?? ''} placeholder="-8Hz" onChange={e => setV('pitch', e.target.value)} />
+                <input className="input" value={v.style ?? ''} placeholder="direção (Gemini)" onChange={e => setV('style', e.target.value)} />
+              </div>)
+          })}
+        </div>
       </div>
       <div className="px-4 pb-4 space-y-3">
         {b.characters.map((c, i) => (

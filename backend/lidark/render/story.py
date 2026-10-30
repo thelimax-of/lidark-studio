@@ -28,6 +28,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
 from ..media import ffmpeg_exe, video_encoder_args
+from . import story_devices as DEV
 from . import story_hud as HUD
 
 log = logging.getLogger("lidark.render.story")
@@ -121,13 +122,40 @@ class Src:
         return ((x0 + x1) / 2 * self.s, (y0 + y1) / 2 * self.s)
 
 
-class Cut:
-    """Personagem recortado (RGBA aparado) com variantes de olhos e cache de tamanhos."""
+def match_to_bg(fig: Image.Image, bg: Image.Image, k: float = 0.32) -> Image.Image:
+    """Integra o personagem (pose limpa de fundo verde) na luz do cenário: puxa a cor média e o brilho para os do
+    fundo e acende uma luz de recorte (rim light) suave na borda com a cor das partes claras do cenário."""
+    a = np.asarray(fig).astype(np.float32)
+    al = a[..., 3] / 255
+    m = al > 0.5
+    if m.sum() < 50:
+        return fig
+    small = np.asarray(bg.convert("RGB").resize((64, 64), Image.BILINEAR)).astype(np.float32).reshape(-1, 3)
+    bg_mean = small.mean(0)
+    lum = small @ [0.299, 0.587, 0.114]
+    bright = small[lum >= np.percentile(lum, 85)].mean(0)
+    fig_mean = a[..., :3][m].mean(0)
+    ratio = np.clip(bg_mean / np.maximum(fig_mean, 1), 0.5, 1.6)
+    rgb = a[..., :3] * ((1 - k) + k * ratio)
+    l_bg, l_fig = float(bg_mean @ [0.299, 0.587, 0.114]), float(fig_mean @ [0.299, 0.587, 0.114])
+    rgb *= float(np.clip((l_bg / max(1.0, l_fig)) ** 0.35, 0.72, 1.12))
+    # rim light: anel de 2-4 px por dentro da borda do alfa
+    A = Image.fromarray((al * 255).astype(np.uint8))
+    inner = np.asarray(A.filter(ImageFilter.MinFilter(7))).astype(np.float32) / 255
+    rim = np.asarray(Image.fromarray(((al - inner).clip(0, 1) * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(2))).astype(np.float32) / 255
+    rgb = rgb + (bright - rgb) * (rim[..., None] * 0.35)
+    out = np.dstack([rgb.clip(0, 255), a[..., 3:]]).astype(np.uint8)
+    return Image.fromarray(out, "RGBA")
 
-    def __init__(self, path: str, grade_kind: str, eyes: dict[str, Any] | None) -> None:
+
+class Cut:
+    """Personagem recortado (RGBA aparado, só de pose limpa em fundo verde) com variantes de olhos e cache de tamanhos."""
+
+    def __init__(self, path: str, grade_kind: str, eyes: dict[str, Any] | None, bg: Image.Image | None = None) -> None:
         im = Image.open(path)
         im.load()
-        self.im = grade(im.convert("RGBA"), grade_kind)
+        im = grade(im.convert("RGBA"), grade_kind)
+        self.im = match_to_bg(im, bg) if bg is not None else im
         self.eyes = eyes
         self.var: dict[str, Image.Image] = {"open": self.im}
         self.sized: dict[tuple, Image.Image] = {}
@@ -295,11 +323,25 @@ class Renderer:
             self.srcs[k] = Src(k, self.W, self.H, self.grade, bg.get("eyes"))
         return self.srcs[k]
 
-    def cut(self, c: dict[str, Any]) -> Cut:
-        k = c["file"]
+    def cut(self, c: dict[str, Any], S: "Src | None" = None) -> Cut:
+        k = c["file"] + "|" + (S and str(id(S)) or "")
         if k not in self.cuts:
-            self.cuts[k] = Cut(k, self.grade, c.get("eyes"))
+            self.cuts[k] = Cut(c["file"], self.grade, c.get("eyes"), S.im if S is not None else None)
         return self.cuts[k]
+
+    def shadow(self, w: int) -> Image.Image:
+        """Sombra de contato macia (elipse borrada), em cache por largura."""
+        w = max(8, int(w / 8) * 8)
+        key = ("shadow", w)
+        if key not in self.portraits:
+            h = max(6, int(w * 0.16))
+            m = Image.new("L", (w + 40, h + 40), 0)
+            ImageDraw.Draw(m).ellipse((20, 20, 20 + w, 20 + h), fill=120)
+            m = m.filter(ImageFilter.GaussianBlur(max(3, w / 22)))
+            sh = Image.new("RGBA", m.size, (0, 0, 0, 0))
+            sh.putalpha(m)
+            self.portraits[key] = sh
+        return self.portraits[key]
 
     def portrait(self, path: str) -> Image.Image:
         if path not in self.portraits:
@@ -375,6 +417,9 @@ class Renderer:
                 fx_, fy_ = (es[0] - cx) * z + self.W / 2, (es[1] - cy) * z + self.H / 2
                 rr = self.W * 0.28 * z
                 boxes["face"] = (fx_ - rr, fy_ - rr * 0.9, fx_ + rr, fy_ + rr * 1.1)
+        if sh.get("device"):  # momento de aparelho em tela cheia: fundo desfocado (o olho vai para a tela do aparelho)
+            small = base.resize((self.W // 10, self.H // 10), Image.BILINEAR).filter(ImageFilter.BoxBlur(1))
+            base = small.resize((self.W, self.H), Image.BILINEAR)
         dim = float(sh.get("dim", 0.0))
         if dim > 0:
             base = tint(base, 1 - dim, (0, 0, 0))
@@ -386,9 +431,8 @@ class Renderer:
                    boxes: dict[str, tuple]) -> None:
         W, H = self.W, self.H
         S = self.src(sh["bg"])
-        sd = ImageDraw.Draw(base, "RGBA")
         for j, c in enumerate(sh["chars"]):
-            C = self.cut(c)
+            C = self.cut(c, S)
             # posição no palco: x (fração da largura do palco), pés em y (fração da altura do palco)
             # em unidades do QUADRO a partir do centro do palco (igual no vertical e no horizontal)
             X = S.SW / 2 + (float(c.get("x", 0.5)) - 0.5) * W
@@ -430,8 +474,8 @@ class Renderer:
             x0, y0 = int(sx - img.width / 2), int(sy - img.height)
             # sombra no chão
             if c.get("shadow", True) and not c.get("no_floor"):
-                sw = img.width * 0.62
-                sd.ellipse((sx - sw / 2, sy - sw * 0.07, sx + sw / 2, sy + sw * 0.07), fill=(0, 0, 0, 70))
+                shd = self.shadow(img.width * 0.7)
+                _paste_clip(base, shd, int(sx - shd.width / 2), int(sy - shd.height / 2 + 2 - jump * 0.0))
             if x0 > W or y0 > H or x0 + img.width < 0 or y0 + img.height < 0:
                 continue
             base.alpha_composite(img, (x0, y0)) if (x0 >= 0 and y0 >= 0) else _paste_clip(base, img, x0, y0)
@@ -457,6 +501,11 @@ class Renderer:
                     if mode == "closed":
                         por = eye_variant(por, data["eyes"], "closed")
                 HUD.dialogue(h, base, lt, dur, data, por)
+            elif typ in DEV.DEVICES:  # aparelho: anima com a voz que sai dele
+                lv = 0.0
+                if self.env is not None:
+                    lv = float(self.env[min(len(self.env) - 1, int(now * self.fps))])
+                DEV.DEVICES[typ](h, base, lt, dur, data, lv)
             else:
                 fn = HUD.WIDGETS.get(typ)
                 if fn:
@@ -593,6 +642,13 @@ def build_audio(spec: dict[str, Any], out: Path, music_bed: Path | None = None) 
             _put(amb, x, a["t0"])
         elif a["kind"] == "static":
             _put(amb, _synth("static", rng), a["t0"], 0.8)
+        elif a["kind"] == "crackle":  # chiado rosa + estalos de rádio por baixo da voz do locutor
+            m = int((a["t1"] - a["t0"]) * SR)
+            if m > 0:
+                white = rng.standard_normal(m).astype(np.float32)
+                pink = np.convolve(white, np.exp(-np.arange(60) / 12.0), "same") * 0.006
+                pops = (rng.random(m) < 6 / SR).astype(np.float32) * rng.uniform(0.05, 0.15, m).astype(np.float32)
+                _put(amb, (pink + np.convolve(pops, np.exp(-np.arange(120) / 20.0), "same")).astype(np.float32), a["t0"])
         elif a["kind"] == "crowd":
             m = int((a["t1"] - a["t0"]) * SR)
             x = np.convolve(rng.standard_normal(m).astype(np.float32), np.ones(60) / 60, "same") * 1.4

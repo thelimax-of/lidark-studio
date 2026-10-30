@@ -7,6 +7,7 @@ type DesktopApi = {
   close: () => Promise<void>
   toggle_fullscreen: () => Promise<boolean>
   is_fullscreen: () => Promise<boolean>
+  open_external?: (url: string) => Promise<void>
 }
 
 declare global {
@@ -54,4 +55,10 @@ export const toggleFullscreen = () => {
   else void document.documentElement.requestFullscreen().catch(() => {})
 }
 export const minimizeWindow = () => void bridge()?.minimize()
+/** Login do Google e links externos: no app de desktop abre no navegador do sistema (o Google bloqueia OAuth em janela embutida). */
+export const openExternal = (url: string) => {
+  const b = bridge()
+  if (b?.open_external) return void b.open_external(url)
+  window.open(url, '_blank', 'width=520,height=720')
+}
 export const closeWindow = () => { const b = bridge(); if (b) void b.close(); else window.close() }

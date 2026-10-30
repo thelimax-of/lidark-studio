@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { openExternal } from '../components/desktop'
 import { Save, Zap, Plus, Trash2, KeyRound, Cpu, ImageIcon, Send, CloudUpload, Bell, Volume2 } from 'lucide-react'
 import { api, invalidate, useApi } from '../api'
 import { act, Field, PageHeader, Skeleton, toast } from '../ui'
@@ -135,7 +136,7 @@ function BackupCard() {
   const { data: st } = useApi<any>('/backup/status', { refetchInterval: 15000 })
   const connect = async () => {
     const r: any = await act(() => api('/backup/drive/connect', { body: {} }))
-    if (r?.auth_url) { window.open(r.auth_url, '_blank', 'width=520,height=720'); toast.info('Autorize na janela do Google. O primeiro backup começa sozinho.') }
+    if (r?.auth_url) { openExternal(r.auth_url); toast.info('Autorize na janela do Google. O primeiro backup começa sozinho.') }
   }
   return (
     <section className="card p-5 space-y-3">
