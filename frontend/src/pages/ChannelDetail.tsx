@@ -141,6 +141,7 @@ export default function ChannelDetail() {
 
           <Section icon={<Mic size={18} />} title="Voz" subtitle="Ouça e escolha. Grátis e ilimitada.">
             <VoicePicker f={f} set={set} />
+            <AudioOptions f={f} set={set} setTheme={setTheme} />
           </Section>
 
           <Section icon={<Flame size={18} />} title="Radar de tendências" subtitle="Todo dia às 7h o sistema vasculha buscas, vídeos virais e concorrentes e cria pautas do momento."
@@ -394,6 +395,46 @@ function VoicePicker({ f, set }: { f: Ch; set: (p: Partial<Ch>) => void }) {
         {['+0%', '+5%', '+10%', '+15%'].map(r => <Toggle key={r} on={f.voice_rate === r} label={r === '+0%' ? 'Normal' : r} onClick={() => set({ voice_rate: r })} />)}
       </div>
     </>
+  )
+}
+
+function AudioOptions({ f, set, setTheme }: { f: Ch; set: (p: Partial<Ch>) => void; setTheme: (p: Record<string, string>) => void }) {
+  const th = f.theme ?? {}
+  const sfxOn = th.sfx !== 'off'
+  const loopOn = th.loop_ok !== 'off'
+  const local = f.voice_provider === 'local'
+  return (
+    <div className="mt-5 pt-4 border-t border-line2 space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Toggle on={sfxOn} label={`Efeitos sonoros: ${sfxOn ? 'ligados' : 'desligados'}`} onClick={() => setTheme({ sfx: sfxOn ? 'off' : 'on' })} />
+        <Toggle on={loopOn} label={`Shorts em loop: ${loopOn ? 'permitido' : 'nunca'}`} onClick={() => setTheme({ loop_ok: loopOn ? 'off' : 'on' })} />
+      </div>
+      <p className="text-xs text-muted">Efeitos: whoosh nos cortes, impacto nas revelações e um “ding” no desfecho, sintetizados aqui mesmo (sem direitos autorais). A quantidade muda a cada vídeo.
+        Loop: quando o roteiro pede, o fim do Short emenda no começo (sem tela final) — quem assiste vê de novo sem perceber o corte.</p>
+      <div className={clsx('p-3 rounded-lg border', local ? 'border-warn/40 bg-warn/5' : 'border-line bg-panel2')}>
+        <div className="flex flex-wrap items-center gap-2">
+          <Toggle on={local} label={local ? 'Voz local (experimental): ligada' : 'Usar voz local (experimental)'}
+            onClick={() => set(local ? { voice_provider: 'edge', voice_name: 'pt-BR-AntonioNeural' } : { voice_provider: 'local', voice_name: th.voice_ref ? 'ref' : 'default' })} />
+        </div>
+        <p className="text-xs text-muted mt-2">Gera a narração no seu computador (Chatterbox). Precisa ser ligada também em Configurações e instalada à parte; usa muita memória
+          (≥ 4 GB de RAM e 3,5 GB de VRAM livres na hora). Se não houver folga, o vídeo sai com a voz Microsoft — nunca trava.</p>
+        {local && (
+          <div className="grid sm:grid-cols-2 gap-3 mt-3">
+            <div><Label>Arquivo de voz de referência</Label>
+              <input className="input" placeholder="minha_voz.wav (em data/voice_local/refs/)" value={th.voice_ref ?? ''}
+                onChange={e => { set({ voice_provider: 'local', voice_name: e.target.value ? 'ref' : 'default', theme: { ...th, voice_ref: e.target.value } }) }} /></div>
+            <div><Label>De quem é a voz?</Label>
+              <select className="input" value={th.voice_ref_consent ?? ''} onChange={e => setTheme({ voice_ref_consent: e.target.value })}>
+                <option value="">— escolha —</option>
+                <option value="own">É a minha própria voz</option>
+                <option value="licensed">Voz licenciada para este uso</option>
+              </select></div>
+            <p className="sm:col-span-2 text-xs text-warn">Nunca use a voz de outra pessoa (famosos, locutores, conhecidos) sem licença: clonar voz de terceiros é proibido pelo YouTube e pode ser crime.
+              Sem arquivo ou sem marcar a origem, usa a voz padrão do modelo.</p>
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 

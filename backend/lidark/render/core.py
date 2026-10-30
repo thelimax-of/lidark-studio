@@ -27,6 +27,7 @@ class Word:
     start: float
     end: float
     hi: bool = False  # destaque dourado
+    kind: str = ""  # tipo do destaque: emph | date | num | name (cor conforme o look do vídeo)
 
     def __post_init__(self):
         self.start, self.end = float(self.start), float(self.end)
@@ -104,6 +105,7 @@ class Timeline:
     theme: dict[str, Any]
     fmt: str = "short"
     hook: str = ""  # frase curta de gancho (texto da miniatura): legível já no 1º quadro dos Shorts
+    loop: float = 0.0  # Short em loop: duração (s) da fusão do fim para o 1º quadro (0 = tem tela final)
 
     def scene_at(self, t: float) -> SceneT:
         for s in self.scenes:
@@ -296,9 +298,29 @@ class FrameWriter:
                 self.video.unlink(missing_ok=True)
 
 
+def _loop_frame(tl: Timeline, template: Any, i: int) -> Image.Image:
+    """Short em loop: sem tela final. Depois da última palavra o quadro congela e, nos últimos `tl.loop` segundos,
+    funde no 1º quadro do vídeo — quando o YouTube volta ao início, a imagem continua de onde estava."""
+    fps = tl.fps
+    t = i / fps
+    i_freeze = max(0, int(math.floor(tl.narration_end * fps)) - 1)
+    a = template.frame(t, i) if i <= i_freeze else template.frame(i_freeze / fps, i_freeze)
+    start = tl.duration - tl.loop
+    if t < start:
+        return a
+    first = getattr(template, "_loop_first", None)
+    if first is None:
+        first = template.frame(0.0, 0)
+        first = first.convert("RGB") if first.mode != "RGB" else first
+        template._loop_first = first
+    p = clamp((t - start) / max(1e-3, tl.loop))
+    p = p * p * (3 - 2 * p)
+    return Image.blend(a.convert("RGB") if a.mode != "RGB" else a, first, p)
+
+
 def render_frame(tl: Timeline, template: Any, i: int) -> Image.Image:
     """Quadro i pronto para o encoder: RGB, já com o look (cor/granulado) do vídeo."""
-    frame = template.frame(i / tl.fps, i)
+    frame = _loop_frame(tl, template, i) if getattr(tl, "loop", 0) else template.frame(i / tl.fps, i)
     look = getattr(template, "look", None)
     if look is not None and look.active:
         frame = look.apply(frame, i)

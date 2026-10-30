@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
-from . import captions, music, tts, visuals
+from . import captions, music, sfx, tts, visuals
 from . import config
 from .config import MEDIA_DIR
 from .db import session
@@ -24,6 +24,34 @@ from .render.infographics import KINDS as GRAPHIC_KINDS
 log = logging.getLogger("lidark.production")
 FPS = 30
 OUTRO_SECONDS = 2.4
+LOOP_TAIL = 0.3  # Short em loop: tempo depois da última palavra (o fim funde no 1º quadro)
+LOOP_XFADE = 0.5  # duração da fusão de imagem e som do fim para o começo
+
+
+def _voice_sig(scenes: list[dict[str, Any]]) -> str:
+    """Assinatura da narração: texto + direção (delivery). Sem delivery é igual à assinatura antiga."""
+    from . import content
+    sig = content.scenes_sig(scenes)
+    dl = [s.get("delivery") for s in scenes]
+    if any(dl):
+        import hashlib
+        sig += hashlib.sha1(json.dumps(dl, sort_keys=True, default=str).encode()).hexdigest()[:8]
+    return sig
+
+
+def tv_metrics(template: Any) -> dict[str, Any]:
+    """Tamanhos de texto do layout (px) para a checagem de legibilidade na TV do inspetor."""
+    k = float(getattr(template, "k", 1.0))
+    H = int(getattr(template, "H", 1080))
+    style = getattr(template, "cap_style", "classic")
+    cap = (62 if style in ("karaoke", "bold") else 52) * k
+    card = getattr(template, "card", None)
+    W = int(getattr(template, "W", 1920))
+    return {"H": H, "W": W, "caption_px": round(cap, 1),
+            "caption_cx": int((card[0] + card[2]) / 2) if card else W // 2,
+            "caption_cy": int(getattr(template, "caption_cy", 0)), "caption_maxw": int(getattr(template, "caption_maxw", 0)),
+            "small_text_px": round(min(27, 28, 34) * k, 1),  # etiqueta da cena / PASSO x/n / título do cabeçalho
+            "caption_boxed": style in ("classic", "highlight")}
 
 
 def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> dict[str, Any]:
@@ -96,31 +124,44 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
 
     def record(rate: str) -> tuple[dict[str, Any], float]:
         if ch.voice_provider == "edge":
-            try:  # narração dirigida: ritmo e pausas de narrador, frase a frase
-                v = tts.synthesize_directed([x["text"] for x in scenes], workdir / "voice.wav", ch.voice_name, rate)
+            try:  # narração dirigida: ritmo e pausas de narrador, frase a frase (+ delivery de cada cena)
+                v = tts.synthesize_directed(scenes, workdir / "voice.wav", ch.voice_name, rate)
                 return v, audio_duration(v["path"])
             except Exception as e:  # noqa: BLE001
                 ctx.log(f"Narração dirigida falhou ({e}) — gravando em ritmo único")
         style = (ch.voice_style + ". Faça uma pausa curta antes das revelações, deixe as perguntas respirarem, "
-                 "fale datas e números com clareza e comece o gancho com energia.")
+                 "fale datas e números com clareza e comece o gancho com energia. " + tts.delivery_hint(scenes)).strip()
+        ref = None
+        if ch.voice_provider == "local":
+            from . import voice_local
+            ref = voice_local.ref_path(ch) if ch.voice_name == "ref" else None
         v = tts.synthesize(full_text, workdir / "voice.mp3", provider=ch.voice_provider, voice=ch.voice_name,
-                           rate=rate, style=style)
+                           rate=rate, style=style, ref=ref)
+        if ch.voice_provider == "local" and v.get("provider") != "local":
+            ctx.log("Voz local indisponível agora (RAM/VRAM/instalação) — narração com Microsoft Neural")
         return v, audio_duration(v["path"])
 
+    # Short em loop (o roteiro pediu: a última frase emenda na primeira): sem tela final, o fim funde no 1º quadro
+    wants_loop = bool(plan.get("loop") or (scenes and scenes[-1].get("loop")))
+    loop = bool(vertical and wants_loop and config.get("loop_enabled")
+                and str((ch.theme or {}).get("loop_ok") or "on") != "off")
+    outro_s = LOOP_TAIL if loop else OUTRO_SECONDS
+    if loop:
+        ctx.log("Short em loop: sem tela final — o fim emenda no começo (imagem e som)")
     base_rate = plan.get("voice_rate") or ch.voice_rate
     # Short: segue a duração sorteada no plano (sem piso de 60s — Shorts não têm duração mínima para monetizar)
     min_total = max(20.0, float(plan.get("seconds") or ch.short_seconds or 45) - 4) if vertical else float(ch.long_minutes or 6) * 60 * 0.9
-    cached = ck.get("voice") if ck.get("voice_sig") == content.scenes_sig(scenes) else None
+    cached = ck.get("voice") if ck.get("voice_sig") == _voice_sig(scenes) else None
     if cached and Path(cached["path"]).exists():
         voice, narr_dur = cached, float(ck["narr_dur"])
         ctx.log(f"Narração reaproveitada da etapa anterior ({narr_dur:.1f}s)")
     else:
         voice, narr_dur = record(base_rate)
     for _ in range(0 if cached else 2):  # narração real ainda curta → acrescenta conteúdo e regrava (nunca enche com tela final)
-        if narr_dur + OUTRO_SECONDS >= min_total:
+        if narr_dur + outro_s >= min_total:
             break
         wps = max(1.5, len(full_text.split()) / max(1.0, narr_dur))
-        missing = int((min_total - narr_dur - OUTRO_SECONDS) * wps) + 6
+        missing = int((min_total - narr_dur - outro_s) * wps) + 6
         ctx.log(f"Narração curta ({narr_dur:.1f}s) — acrescentando ~{missing} palavras ao roteiro")
         try:
             more = content.expand_script(ch, sc.title, expanded, missing, facts_hint)
@@ -132,16 +173,19 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
         scenes = prep(expanded)
         full_text = " ".join(s["text"].strip() for s in scenes)
         voice, narr_dur = record(base_rate)
-    gap = min_total - narr_dur - OUTRO_SECONDS
+    gap = min_total - narr_dur - outro_s
     if not cached and 0 < gap <= narr_dur * 0.06 and voice.get("provider") == "edge":  # ajuste fino imperceptível (≤ 6%)
         cur = int((base_rate or "+0%").strip("%") or 0)
         new_rate = cur - int(gap / narr_dur * 100) - 1
         voice, narr_dur = record(f"{new_rate:+d}%")
         ctx.log(f"Ajuste fino de velocidade: {new_rate:+d}%")
     if not cached:
-        ck.update(voice=voice, narr_dur=narr_dur, voice_sig=content.scenes_sig(scenes), picks={})
+        ck.update(voice=voice, narr_dur=narr_dur, voice_sig=_voice_sig(scenes), picks={})
         save_ck()
     ctx.log(f"Narração: {voice['provider']} / {voice['voice']} — {narr_dur:.1f}s ({len(full_text.split())} palavras)")
+    if (voice.get("directed") or {}).get("delivery"):
+        dd = voice["directed"]
+        ctx.log(f"Direção do roteiro aplicada em {dd['delivery']} cena(s) ({dd.get('emphasis_beats', 0)} ênfase(s) com micro-pausa)")
 
     # 2) tempo de cada palavra --------------------------------------------------
     ctx.update(0.1, "Sincronizando legendas palavra por palavra")
@@ -151,12 +195,11 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
     idx = 0
     for s in scenes:
         n = len(s["text"].split())
-        emph = {captions.norm(x) for e in (s.get("emphasis") or []) for x in str(e).split()}
-        ws = []
-        for tw in timed[idx: idx + n]:
-            nw = captions.norm(tw["w"])
-            hi = bool(nw) and (nw in emph or any(c.isdigit() for c in nw))
-            ws.append(Word(tw["w"], tw["start"], tw["end"], hi))
+        emph_src = list(s.get("emphasis") or []) + list((s.get("delivery") or {}).get("emphasis") or [])
+        emph = {captions.norm(x) for e in emph_src for x in str(e).split() if captions.norm(x)}
+        seg = timed[idx: idx + n]
+        kinds = captions.highlight_kinds([tw["w"] for tw in seg], emph)  # datas, números, nomes e ênfases
+        ws = [Word(tw["w"], tw["start"], tw["end"], bool(kd), kd) for tw, kd in zip(seg, kinds)]
         idx += n
         words += ws
         scene_words.append(ws)
@@ -347,6 +390,8 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
         st.end = float(scene_ts[i + 1].start if i + 1 < n else narration_end)
     # a tela final pode completar no máximo 3s (nunca fica repetindo o encerramento)
     duration = narration_end + OUTRO_SECONDS + min(3.0, max(0.0, min_total - narration_end - OUTRO_SECONDS))
+    if loop:  # sem tela final: só o respiro da fusão com o começo
+        duration = narration_end + LOOP_TAIL
     if sc.format == "long" and not vertical:  # tela final de 20 s ("assista o próximo" + inscrição) p/ os elementos do YouTube
         from .render.endcard import END_SCREEN_SECONDS
         duration = narration_end + 0.15 + END_SCREEN_SECONDS
@@ -357,8 +402,14 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
 
     # 5) direção de animação + envelope da voz (boca do mascote) ----------------------------
     env = _envelope(voice["path"], duration)
-    tl = Timeline(W, H, FPS, duration, narration_end, sc.title, scene_ts, steps, words, env, {**(ch.theme or {}), "_look": plan.get("look") or {}, "_series": plan.get("series") or ""}, sc.format,
-                  hook=(sc.thumbnail_text or "").strip())
+    op0 = (scenes[0].get("opening") or {}) if scenes and isinstance(scenes[0].get("opening"), dict) else {}
+    opening = str(plan.get("opening_type") or op0.get("type") or "")
+    # texto da abertura pedido pelo roteiro (1º ~2 s) tem prioridade sobre o texto da miniatura
+    hook = str(op0.get("onscreen") or "").strip() or (sc.thumbnail_text or "").strip()
+    tl = Timeline(W, H, FPS, duration, narration_end, sc.title, scene_ts, steps, words, env,
+                  {**(ch.theme or {}), "_look": plan.get("look") or {}, "_series": plan.get("series") or "",
+                   "_opening": opening}, sc.format,
+                  hook=hook[:80], loop=LOOP_XFADE if loop else 0.0)
     template = _template(tpl, tl)
     impacts = list(getattr(template, "impacts", []))
     if hasattr(template, "_setup_direction"):
@@ -371,8 +422,18 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
     if track:
         ctx.log(f"Trilha: {track['title']} ({track['source']})")
     final_audio = workdir / "mix.wav"
-    _mix_audio(voice["path"], track["path"] if track else None, [st.start for st in scene_ts[1:]],
-               duration, ch.music_volume, final_audio, impacts)
+    starts = [st.start for st in scene_ts]
+    fx_plan = {"dose": "off", "events": []}
+    if sfx.enabled(ch):
+        fx_plan = sfx.plan(sum(ord(c) for c in sc.title) + video_id, starts[1:],
+                           impacts + sfx.reveal_times(scenes, starts), sfx.payoff_time(scenes, starts), duration,
+                           vertical=vertical, opening=opening)
+        ctx.log(f"Efeitos sonoros: dose {fx_plan['dose']} ({len(fx_plan['events'])} efeitos)")
+    audio_info = _mix_audio(voice["path"], track["path"] if track else None, duration, ch.music_volume, final_audio,
+                            fx_plan["events"], loop_tail=LOOP_XFADE if loop else 0.0)
+    if audio_info.get("measured_lufs") is not None:
+        ctx.log(f"Mix normalizado: {audio_info['target_lufs']:.0f} LUFS (antes {audio_info['measured_lufs']:.1f}), "
+                f"pico real ≤ {audio_info['true_peak']:.1f} dBTP")
 
     # 7) render -------------------------------------------------------------------------
     out = workdir / f"{ch.slug}_{video_id}.mp4"
@@ -413,7 +474,12 @@ def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> di
                     "visual": (st.graphic or {}).get("kind") or (picks[k] or {}).get("kind", "")}
                    for k, st in enumerate(scene_ts)],
         "captions": {"script_words": len(full_text.split()), "timed_words": len(words),
-                     "last_word_end": words[-1].end if words else 0.0},
+                     "last_word_end": words[-1].end if words else 0.0,
+                     "highlights": {k: sum(1 for w in words if w.kind == k) for k in ("emph", "date", "num", "name")},
+                     "highlight_mode": getattr(template, "hl_mode", "")},
+        "audio": {**audio_info, "sfx_dose": fx_plan["dose"], "sfx": len(fx_plan["events"])},
+        "loop": loop, "opening_type": opening,
+        "tv": tv_metrics(template),
     }
     (workdir / "assets.json").write_text(json.dumps(assets, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     ctx.log(f"Vídeo pronto: {duration:.1f}s → {out.name}")
@@ -492,40 +558,93 @@ def _template(name: str, tl: Timeline):
     return OuroTemplate(tl)
 
 
-def _mix_audio(voice: str, track: str | None, cuts: list[float], duration: float, music_vol: float, out: Path,
-               impacts: list[float] | None = None) -> None:
-    whoosh, pop, hit = music.sfx("whoosh"), music.sfx("pop"), music.sfx("impact")
+TRUE_PEAK = -1.5  # alvo do loudnorm; a margem de 0,5 dB absorve o AAC → arquivo final ≤ -1 dBTP
+
+
+def _mix_audio(voice: str, track: str | None, duration: float, music_vol: float, out: Path,
+               events: list[dict[str, Any]] | None = None, loop_tail: float = 0.0) -> dict[str, Any]:
+    """Voz + trilha com ducking (sidechain pela voz) + efeitos (sfx.plan) → loudnorm em 2 passadas.
+
+    Loop: a trilha não tem fade; começa adiantada `loop_tail` s e, no fim, funde no próprio começo — quando o
+    vídeo recomeça, o som continua exatamente de onde estava. O ducking fica "segurado" na emenda."""
     inputs = ["-i", voice]
     filters = ["[0:a]aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=11,apad[v0]"]
     mix = ["[v0]"]
     idx = 1
+    D = float(duration)
     if track:
+        vol = f"volume={music_vol * 2.2:.3f}"
         inputs += ["-stream_loop", "-1", "-i", track]
-        filters.append(f"[{idx}:a]aresample=48000,volume={music_vol * 2.2:.3f},afade=t=in:d=0.8,"
-                       f"afade=t=out:st={max(0, duration - 1.8):.2f}:d=1.8,atrim=0:{duration:.2f}[mus]")
-        filters.append("[v0]asplit=2[voice][vkey]")
-        filters.append("[mus][vkey]sidechaincompress=threshold=0.03:ratio=6:attack=20:release=350[ducked]")
+        if loop_tail:
+            o = float(loop_tail)
+            inputs += ["-i", track]
+            filters.append(f"[{idx}:a]aresample=48000,atrim=start={o:.3f},asetpts=PTS-STARTPTS,{vol},atrim=0:{D:.3f},"
+                           f"afade=t=out:st={D - o:.3f}:d={o:.3f}[mbody]")
+            filters.append(f"[{idx + 1}:a]aresample=48000,atrim=0:{o:.3f},asetpts=PTS-STARTPTS,{vol},"
+                           f"afade=t=in:d={o:.3f},adelay={int((D - o) * 1000)}:all=1[mhead]")
+            filters.append("[mbody][mhead]amix=inputs=2:normalize=0:duration=longest[mus]")
+            # chave do ducking: voz + um tom inaudível (só na chave) na emenda → a música não "sobe" antes de recomeçar
+            filters.append(f"aevalsrc=0.12*sin(2*PI*220*t):s=48000:d={o + 0.2:.3f},adelay={int((D - o) * 1000)}:all=1[hold]")
+            filters.append("[v0]asplit=2[voice][vk0]")
+            filters.append("[vk0][hold]amix=inputs=2:normalize=0:duration=first[vkey]")
+            idx += 2
+        else:
+            filters.append(f"[{idx}:a]aresample=48000,{vol},afade=t=in:d=0.8,"
+                           f"afade=t=out:st={max(0, D - 1.8):.2f}:d=1.8,atrim=0:{D:.2f}[mus]")
+            filters.append("[v0]asplit=2[voice][vkey]")
+            idx += 1
+        filters.append("[mus][vkey]sidechaincompress=threshold=0.03:ratio=6:attack=15:release=300[ducked]")
         mix = ["[voice]", "[ducked]"]
+    # efeitos: um arquivo por (tipo, variante), repartido com asplit
+    events = [e for e in (events or []) if 0 <= e["t"] < D]
+    groups: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for e in events:
+        groups.setdefault((e["kind"], int(e.get("variant", 0))), []).append(e)
+    for g, ((kind, var), evs) in enumerate(groups.items()):
+        inputs += ["-i", str(sfx.sound(kind, var))]
+        labels = [f"s{g}_{j}" for j in range(len(evs))]
+        filters.append(f"[{idx}:a]aresample=48000,asplit={len(evs)}" + "".join(f"[{x}]" for x in labels)
+                       if len(evs) > 1 else f"[{idx}:a]aresample=48000[{labels[0]}]")
+        for x, e in zip(labels, evs):
+            filters.append(f"[{x}]adelay={int(e['t'] * 1000)}:all=1,volume={float(e.get('gain', 0.3)):.3f}[{x}d]")
+            mix.append(f"[{x}d]")
         idx += 1
-    inputs += ["-i", str(whoosh), "-i", str(pop), "-i", str(hit)]
-    w_i, p_i, h_i = idx, idx + 1, idx + 2
-    impacts = [x for x in (impacts or []) if x > 0.2][:20]
-    if impacts:
-        filters.append(f"[{h_i}:a]asplit={len(impacts)}" + "".join(f"[h{k}]" for k in range(len(impacts))))
-        for k, c in enumerate(impacts):
-            filters.append(f"[h{k}]adelay={int(max(0, c - 0.03) * 1000)}:all=1,volume=0.45[hd{k}]")
-            mix.append(f"[hd{k}]")
-    cuts = [c for c in cuts if c > 0.3][:40]
-    if cuts:
-        filters.append(f"[{w_i}:a]asplit={len(cuts)}" + "".join(f"[w{k}]" for k in range(len(cuts))))
-        filters.append(f"[{p_i}:a]asplit={len(cuts)}" + "".join(f"[p{k}]" for k in range(len(cuts))))
-        for k, c in enumerate(cuts):
-            filters.append(f"[w{k}]adelay={int(max(0, c - 0.18) * 1000)}:all=1,volume=0.35[wd{k}]")
-            filters.append(f"[p{k}]adelay={int((c + 0.05) * 1000)}:all=1,volume=0.30[pd{k}]")
-            mix += [f"[wd{k}]", f"[pd{k}]"]
-    filters.append("".join(mix) + f"amix=inputs={len(mix)}:normalize=0:duration=longest,atrim=0:{duration:.2f},"
-                   "alimiter=limit=0.95[out]")
-    run_ffmpeg([*inputs, "-filter_complex", ";".join(filters), "-map", "[out]", "-ar", "48000", "-ac", "2", str(out)])
+    filters.append("".join(mix) + f"amix=inputs={len(mix)}:normalize=0:duration=longest,atrim=0:{D:.3f}[out]")
+    premix = out.with_name(out.stem + "_premix.wav")
+    run_ffmpeg([*inputs, "-filter_complex", ";".join(filters), "-map", "[out]", "-ar", "48000", "-ac", "2",
+                "-c:a", "pcm_f32le", str(premix)])
+    try:
+        return loudnorm_2pass(premix, out, float(config.get("loudness_target") or -14.0))
+    finally:
+        premix.unlink(missing_ok=True)
+
+
+def loudnorm_2pass(src: Path, out: Path, target: float = -14.0, tp: float = TRUE_PEAK) -> dict[str, Any]:
+    """Normalização EBU R128 em duas passadas: mede o mix inteiro e aplica um ganho único (linear) até o alvo;
+    se o ganho estouraria o pico real, o loudnorm limita sozinho (modo dinâmico)."""
+    import re
+    import subprocess
+    from .media import ffmpeg_exe
+    base = f"loudnorm=I={target:.1f}:TP={tp:.1f}:LRA=18"
+    r = subprocess.run([ffmpeg_exe(), "-hide_banner", "-nostats", "-i", str(src), "-af", base + ":print_format=json",
+                        "-f", "null", "-"], capture_output=True, text=True, encoding="utf-8", errors="ignore", timeout=900)
+    m = None
+    blocks = re.findall(r"\{[^{}]*\"input_i\"[^{}]*\}", r.stderr)
+    if blocks:
+        try:
+            m = json.loads(blocks[-1])
+        except ValueError:
+            m = None
+    if m and all(m.get(k) not in (None, "-inf", "inf") for k in ("input_i", "input_tp", "input_lra", "input_thresh")):
+        af = (f"{base}:measured_I={m['input_i']}:measured_TP={m['input_tp']}:measured_LRA={m['input_lra']}:"
+              f"measured_thresh={m['input_thresh']}:offset={m.get('target_offset', '0')}:linear=true")
+        mode = "2pass"
+    else:  # medição falhou (áudio mudo?): 1 passada dinâmica
+        af, mode = base, "1pass"
+    run_ffmpeg(["-i", str(src), "-af", af + ",aresample=48000", "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", str(out)])
+    return {"target_lufs": target, "true_peak": tp, "mode": mode,
+            "measured_lufs": float(m["input_i"]) if m and mode == "2pass" else None,
+            "measured_tp": float(m["input_tp"]) if m and mode == "2pass" else None}
 
 
 def _envelope(voice: str, duration: float) -> np.ndarray:

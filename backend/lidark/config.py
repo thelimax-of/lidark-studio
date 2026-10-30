@@ -44,6 +44,11 @@ DEFAULTS: dict[str, Any] = {
     "ollama_model": "qwen3:8b",
     # TTS
     "gemini_tts_model": "gemini-3.8-flash-tts",
+    "local_voice_enabled": False,  # voz local (Chatterbox, ver voice_local.py) — experimental, desligada
+    # Áudio final
+    "loudness_target": -14.0,  # LUFS integrado do mix (YouTube normaliza em -14); pico real ≤ -1 dBTP
+    "sfx_enabled": True,  # efeitos sintetizados (whoosh/impacto/ding); cada canal pode desligar
+    "loop_enabled": True,  # Shorts em loop (fim emenda no começo, sem tela final) quando o roteiro pede
     # Imagens
     "pexels_api_key": "",
     "smithsonian_api_key": "",  # grátis em api.data.gov (sem ela usa DEMO_KEY, com limite)

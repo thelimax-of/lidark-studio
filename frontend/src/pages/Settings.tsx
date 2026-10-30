@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Save, Zap, Plus, Trash2, KeyRound, Cpu, ImageIcon, Send, CloudUpload, Bell } from 'lucide-react'
+import { Save, Zap, Plus, Trash2, KeyRound, Cpu, ImageIcon, Send, CloudUpload, Bell, Volume2 } from 'lucide-react'
 import { api, invalidate, useApi } from '../api'
 import { act, Field, PageHeader, Skeleton, toast } from '../ui'
 import { IconBox } from './kit'
@@ -95,6 +95,25 @@ export default function Settings() {
                   <option value="cpu">CPU</option><option value="cuda">GPU (CUDA)</option>
                 </select>
               </Field>
+            </div>
+          </section>
+
+          <section className="card p-5 space-y-3">
+            <h3 className="font-semibold flex items-center gap-2"><Volume2 size={17} className="text-muted" /> Áudio e voz</h3>
+            <Field label="Volume final do vídeo (LUFS integrado)" hint="O YouTube toca tudo em -14 LUFS: mixar no mesmo nível evita o vídeo soar baixo ou ser abaixado. Pico real fica sempre em -1 dBTP ou menos.">
+              <select className="input" value={String(f.loudness_target ?? -14)} onChange={e => set('loudness_target', Number(e.target.value))}>
+                <option value="-14">-14 LUFS (padrão YouTube)</option>
+                <option value="-13">-13 LUFS (um pouco mais alto)</option>
+                <option value="-16">-16 LUFS (mais dinâmico)</option>
+              </select>
+            </Field>
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.sfx_enabled !== false} onChange={e => set('sfx_enabled', e.target.checked)} /> Efeitos sonoros (whoosh nos cortes, impacto nas revelações, ding no desfecho) — cada canal pode desligar</label>
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.loop_enabled !== false} onChange={e => set('loop_enabled', e.target.checked)} /> Shorts em loop quando o roteiro pede (fim emenda no começo, sem tela final)</label>
+            <div className={`p-3 rounded-lg border ${f.local_voice_enabled ? 'border-warn/40 bg-warn/5' : 'border-line'}`}>
+              <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!f.local_voice_enabled} onChange={e => set('local_voice_enabled', e.target.checked)} /> Voz local (Chatterbox) — experimental</label>
+              <p className="text-xs text-muted mt-1.5">Roda no seu PC num ambiente separado (instalação manual de ~6 GB: veja <code>backend/lidark/voice_local.py</code>). Só é usada nos canais
+                que escolherem “voz local” e só quando houver ≥ 4 GB de RAM e 3,5 GB de VRAM livres; senão o vídeo sai com a voz Microsoft. Com 8 GB de RAM, renderizar e gerar voz ao mesmo tempo pode deixar o PC lento.</p>
+              <p className="text-xs text-warn mt-1">Voz de referência: só a sua própria ou uma voz licenciada. Nunca clone a voz de outra pessoa.</p>
             </div>
           </section>
 

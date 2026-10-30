@@ -101,3 +101,63 @@ def word_timeline(text: str, audio_path: str, total: float, tts_words: list | No
             cur += d
         return out
     return [{"w": r["w"], "start": float(r["start"]), "end": float(r["end"])} for r in align(words, timed, float(total))]
+
+
+# ---------------------------------------------------------------- destaque semântico das legendas
+#
+# Cada palavra da legenda ganha um "tipo" de destaque: ênfase pedida pelo roteiro (delivery.emphasis / emphasis),
+# data, número ou nome próprio. O template pinta cada tipo conforme o look sorteado para o vídeo
+# (ver OuroTemplate._hi_color). Há um teto de destaques por cena: legenda toda colorida não destaca nada.
+
+MONTHS = {"janeiro", "fevereiro", "marco", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro",
+          "novembro", "dezembro", "seculo", "seculos", "decada", "decadas", "milenio"}
+NUMBER_WORDS = {"dois", "duas", "tres", "quatro", "cinco", "seis", "sete", "oito", "nove", "dez", "onze", "doze",
+                "quinze", "vinte", "trinta", "quarenta", "cinquenta", "sessenta", "setenta", "oitenta", "noventa",
+                "cem", "cento", "duzentos", "trezentos", "quinhentos", "mil", "milhao", "milhoes", "bilhao", "bilhoes",
+                "trilhao", "trilhoes", "metade", "dobro", "triplo", "dezenas", "centenas", "milhares"}
+# palavras que costumam vir com maiúscula sem serem nomes (início de frase já é ignorado à parte)
+NOT_NAMES = {"eu", "voce", "voces", "ele", "ela", "eles", "elas", "nos", "isso", "esse", "essa", "este", "esta",
+             "mas", "um", "uma", "segue", "siga", "comenta", "deus", "shorts"}
+PRIORITY = {"emph": 0, "date": 1, "num": 2, "name": 3}
+
+
+def _is_date(nw: str, prev: str, nxt: str) -> bool:
+    if nw in MONTHS or re.fullmatch(r"1\d{3}|20\d{2}", nw):
+        return True
+    return bool(re.fullmatch(r"\d{1,2}", nw)) and norm(prev) in ("dia", "em") and norm(nxt) == "de"
+
+
+def highlight_kinds(words: list[str], emphasis: set[str] | None = None) -> list[str]:
+    """Tipo de destaque de cada palavra de UMA cena: 'emph' | 'date' | 'num' | 'name' | ''."""
+    emphasis = emphasis or set()
+    kinds: list[str] = []
+    for i, w in enumerate(words):
+        nw = norm(w)
+        prev = words[i - 1] if i else ""
+        nxt = words[i + 1] if i + 1 < len(words) else ""
+        k = ""
+        if not nw:
+            pass
+        elif nw in emphasis:
+            k = "emph"
+        elif _is_date(nw, prev, nxt):
+            k = "date"
+        elif any(c.isdigit() for c in nw) or "%" in w or nw in NUMBER_WORDS:
+            k = "num"
+        elif len(nw) >= 3 and nw not in NOT_NAMES:
+            core = w.strip("\"'“”‘’()[]¿¡#")
+            sentence_start = i == 0 or prev.rstrip().endswith((".", "!", "?", ":", "…", "—"))
+            if core[:1].isupper() and (not sentence_start or (core.isupper() and len(core) >= 3)):
+                k = "name"
+        kinds.append(k)
+    # teto: no máximo ~1 destaque a cada 4 palavras (mínimo 2 por cena), pela prioridade do tipo
+    cap = max(2, len(words) // 4)
+    marked = sorted((i for i, k in enumerate(kinds) if k), key=lambda i: (PRIORITY[kinds[i]], i))
+    keep = set(marked[:cap])
+    # nomes compostos ("Dom Pedro", "Santos Dumont") ficam inteiros se a 1ª parte entrou
+    for i in sorted(keep):
+        j = i + 1
+        while kinds[i] == "name" and j < len(kinds) and kinds[j] == "name":
+            keep.add(j)
+            j += 1
+    return [k if i in keep else "" for i, k in enumerate(kinds)]
