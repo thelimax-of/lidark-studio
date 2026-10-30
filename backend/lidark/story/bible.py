@@ -177,8 +177,9 @@ DEFAULTS: dict[str, dict[str, Any]] = {
 # cota grátis curta). O provedor é escolhido UMA vez por episódio e papel (nunca mistura no mesmo papel).
 # Personagem sem entrada aqui usa voice/pitch/rate da própria ficha.
 DEFAULT_VOICES: dict[str, dict[str, Any]] = {
-    # narradora: a voz multilíngue soa bem menos robótica que a Antonio (escolha do usuário em 30/10)
-    "narrador": {"provider": "edge", "voice": "pt-BR-ThalitaMultilingualNeural", "rate": "+0%", "pitch": "+0Hz",
+    # narradora: Kokoro Dora (local, ilimitada) — escolha do usuário em 30/10; vozes multilíngues erram a pronúncia
+    "narrador": {"provider": "kokoro", "voice": "pf_dora", "speed": 1.0,
+                 "fallback": {"voice": "pt-BR-FranciscaNeural", "rate": "-6%", "pitch": "-6Hz"},
                  "style": "Narradora brasileira de série de suspense, voz próxima e envolvente, ritmo firme"},
     "tv": {"provider": "edge", "voice": "pt-BR-FranciscaNeural", "rate": "+6%", "pitch": "+0Hz", "style": "Âncora de telejornal em plantão urgente"},
     "radio": {"provider": "edge", "voice": "pt-BR-AntonioNeural", "rate": "+16%", "pitch": "+6Hz", "style": "Locutor de rádio esportivo empolgado"},
@@ -216,7 +217,7 @@ def load(slug: str) -> dict[str, Any]:
 
 
 def save(slug: str, data: dict[str, Any]) -> dict[str, Any]:
-    allowed = set(DEFAULTS["ouro-do-passado"]) | {"enabled", "share", "notes", "voices", "max_parts"}
+    allowed = set(DEFAULTS["ouro-do-passado"]) | {"enabled", "share", "notes", "voices", "max_parts", "dedicated"}
     with _lock:
         cur = load(slug)
         for k, v in data.items():

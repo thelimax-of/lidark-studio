@@ -202,6 +202,9 @@ def job_write_script(ctx: JobContext) -> dict:
         idea = s.get(Idea, ctx.ref_id)
     ch = _channel(idea.channel_id)
     fmt = ctx.payload.get("format") or idea.format
+    from .story import jobs as _story  # Modo História: canal dedicado (ou fração configurada) vira episódio
+    if not ctx.payload.get("no_story") and _story.wants_story(ch, fmt, idea):
+        return _story.divert(ctx, ch, idea, fmt)
     ctx.update(0.1, "Pesquisando fontes e escrevendo roteiro")
     from . import growth
     camp = growth.campaign_of(idea, ch)

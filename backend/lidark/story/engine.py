@@ -77,10 +77,23 @@ def _edge_fallback(b: dict[str, Any], role: str, cfg: dict[str, Any]) -> dict[st
         base = B.DEFAULT_VOICES.get(role) or (
             {"voice": c.get("voice"), "rate": c.get("rate"), "pitch": c.get("pitch")} if c else B.DEFAULT_VOICES["narrador"])
         fb = {k: base.get(k) for k in ("voice", "rate", "pitch")}
-    return {**fb, "provider": "edge", "fallback_from": "gemini"}
+    v = str(fb.get("voice") or "")
+    if not v.startswith("pt-BR"):  # voz Kokoro (pf_*/pm_*) não existe no edge: usa a equivalente
+        fb["voice"] = "pt-BR-FranciscaNeural" if v.startswith("pf_") else "pt-BR-AntonioNeural"
+    return {**fb, "provider": "edge", "fallback_from": cfg.get("provider") or "gemini"}
+
+
+def _kokoro_speed(cfg: dict[str, Any], emotion: str, narrator: bool) -> float:
+    de, _ = tts.EMOTION.get(emotion, (0, 0)) if narrator else (0, 0)
+    return round(float(cfg.get("speed") or 1.0) * (1 + de / 100), 3)
 
 
 def _synth_one(text: str, cfg: dict[str, Any], out: Path, emotion: str, narrator: bool) -> None:
+    if cfg.get("provider") == "kokoro":
+        from .. import voice_kokoro
+        voice_kokoro.synth_batch([{"text": text, "voice": cfg.get("voice") or "pf_dora",
+                                   "speed": _kokoro_speed(cfg, emotion, narrator), "out": str(out)}])
+        return
     if cfg.get("provider") == "gemini":
         style = cfg.get("style") or ""
         if emotion:
@@ -111,14 +124,32 @@ def synth_lines(ch: Channel, b: dict[str, Any], beats: list[dict[str, Any]], wor
     roles: dict[str, list[int]] = {}
     for i, bt in enumerate(beats):
         roles.setdefault(bt.get("speaker", "narrador") or "narrador", []).append(i)
+    def _path(i: int, cfg: dict[str, Any]) -> Path:
+        bt = beats[i]
+        key = hashlib.sha1(f"{bt['text']}|{json.dumps(cfg, sort_keys=True)}|{bt.get('emotion')}".encode()).hexdigest()[:12]
+        return d / f"{i:02d}_{key}{'.wav' if cfg.get('provider') == 'kokoro' else '.mp3'}"
+
+    # Kokoro (local): todas as falas do episódio num processo só (o modelo carrega uma vez). Se falhar, os papéis
+    # Kokoro inteiros vão para o edge — nunca metade de um personagem em cada voz.
+    kjobs = [{"text": beats[i]["text"], "voice": plan[r].get("voice") or "pf_dora", "out": str(_path(i, plan[r])),
+              "speed": _kokoro_speed(plan[r], str(beats[i].get("emotion") or "").lower(), r == "narrador")}
+             for r, idxs in roles.items() if plan[r].get("provider") == "kokoro" for i in idxs]
+    if kjobs:
+        try:
+            from .. import voice_kokoro
+            voice_kokoro.synth_batch(kjobs)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Kokoro indisponível (%s) — papéis Kokoro vão para o edge", e)
+            for r in roles:
+                if plan[r].get("provider") == "kokoro":
+                    plan[r] = _edge_fallback(b, r, plan[r])
     for role, idxs in roles.items():
         cfg = plan[role]
         for attempt in range(2):
             try:
                 for i in idxs:
                     bt = beats[i]
-                    key = hashlib.sha1(f"{bt['text']}|{json.dumps(cfg, sort_keys=True)}|{bt.get('emotion')}".encode()).hexdigest()[:12]
-                    p = d / f"{i:02d}_{key}.mp3"
+                    p = _path(i, cfg)
                     if not p.exists() or p.stat().st_size < 1000:
                         _synth_one(bt["text"], cfg, p, str(bt.get("emotion") or "").lower(), role == "narrador")
                     paths[i] = p

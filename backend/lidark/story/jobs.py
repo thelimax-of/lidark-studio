@@ -83,6 +83,8 @@ def wants_story(ch: Channel, fmt: str, idea: Idea | None = None) -> bool:
     share = story_share(ch, fmt)
     if share <= 0:
         return False
+    if B.load(ch.slug).get("dedicated"):  # canal só de histórias (ex.: Zé na Fuga): toda pauta vira episódio
+        return True
     with session() as s:
         rows = s.exec(select(Script).where(Script.channel_id == ch.id).order_by(Script.id.desc()).limit(YPP_WINDOW)).all()
     recent = [(r.variety or {}).get("structure") for r in rows]
