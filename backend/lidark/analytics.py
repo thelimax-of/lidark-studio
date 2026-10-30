@@ -156,7 +156,62 @@ def daily_analytics(channel_id: int, days: int = 28) -> dict[str, Any]:
                            metrics="views,estimatedMinutesWatched,subscribersGained,likes,shares",
                            dimensions="day", sort="day").execute()
     rows = [{"day": d, "views": v, "minutes": m, "subs": sg, "likes": lk, "shares": sh} for d, v, m, sg, lk, sh in r.get("rows", []) or []]
+    # o Analytics só libera os dados com ~2-3 dias de atraso: os dias que faltam saem das nossas leituras por vídeo
+    last = date.fromisoformat(rows[-1]["day"]) if rows else start - timedelta(days=1)
+    rows += recent_estimate(channel_id, last + timedelta(days=1), end)
     return {"rows": rows, "connected": True}
+
+
+def recent_estimate(channel_id: int, first, last) -> list[dict[str, Any]]:
+    """Views/curtidas por dia (fuso local) de first a last, a partir das leituras de métricas de cada vídeo.
+    O acumulado de cada vídeo é interpolado entre as leituras (de 0 na publicação até a 1ª leitura) e a diferença
+    na virada de cada dia vira o valor do dia. Minutos/inscritos/compartilhamentos só o Analytics tem: ficam vazios."""
+    from datetime import datetime, time, timedelta
+    if first > last:
+        return []
+    tz = datetime.now().astimezone().tzinfo
+    utc = lambda dt: dt if dt.tzinfo else dt.replace(tzinfo=__import__("datetime").timezone.utc)  # noqa: E731
+    with session() as s:
+        pubs = {p.id: p for p in s.exec(select(Publication).where(Publication.channel_id == channel_id,
+                                                                  Publication.platform == "youtube")).all()}
+        snaps = s.exec(select(MetricSnapshot).where(MetricSnapshot.channel_id == channel_id, MetricSnapshot.platform == "youtube")
+                       .order_by(MetricSnapshot.captured_at)).all()
+    series: dict[int, list[tuple[datetime, int, int]]] = defaultdict(list)
+    for m in snaps:
+        if m.publication_id in pubs:
+            series[m.publication_id].append((utc(m.captured_at), m.views or 0, m.likes or 0))
+    if not series:
+        return []
+
+    def cum(pts: list, born, t) -> tuple[float, float]:
+        if t >= pts[-1][0]:
+            return float(pts[-1][1]), float(pts[-1][2])  # depois da última leitura: ainda não sabemos
+        prev = (born, 0, 0) if born and born < pts[0][0] else None
+        for p in pts:
+            if t < p[0]:
+                if prev is None or t <= prev[0]:
+                    return (0.0, 0.0) if prev else (float(p[1]), float(p[2]))
+                f = (t - prev[0]) / (p[0] - prev[0])
+                return prev[1] + f * (p[1] - prev[1]), prev[2] + f * (p[2] - prev[2])
+            prev = p
+        return float(pts[-1][1]), float(pts[-1][2])
+
+    out = []
+    d = first
+    while d <= last:
+        a = datetime.combine(d, time.min, tz)
+        b = a + timedelta(days=1)
+        v = lk = 0.0
+        for pid, pts in series.items():
+            born = utc(pubs[pid].published_at) if pubs[pid].published_at else None
+            # sem leitura antes do dia e publicado antes dele: o ponto de partida é desconhecido
+            if pts[0][0] > a and (born is None or born < a - timedelta(days=1)):
+                continue
+            (v0, l0), (v1, l1) = cum(pts, born, a), cum(pts, born, b)
+            v, lk = v + max(0.0, v1 - v0), lk + max(0.0, l1 - l0)
+        out.append({"day": d.isoformat(), "views": round(v), "likes": round(lk), "estimated": True})
+        d += timedelta(days=1)
+    return out
 
 
 # ================================================================ todos os canais
@@ -228,6 +283,8 @@ def overview(days: int = 28, channel_id: int | None = None) -> dict[str, Any]:
                 if k in r:
                     d[k] = d.get(k, 0) + (r[k] or 0)
             d[f"c{sm['id']}"] = d.get(f"c{sm['id']}", 0) + (r.get("views") or 0)
+            if r.get("estimated"):
+                d["estimated"] = True
     keys = {k for sm in summaries for k in sm["period"]}
     totals = {k: sum(sm["period"].get(k, 0) for sm in summaries) for k in keys}
     totals.update({

@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { CartesianGrid, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { AlertTriangle, ArrowUpRight } from 'lucide-react'
 import { useApi } from '../api'
 import { fmtNum, PageHeader, SectionTitle, seriesColor, Skeleton, Sparkline, useChannel } from '../ui'
@@ -14,9 +14,19 @@ type ChannelSum = {
 }
 export type Overview = {
   days: number; channels: ChannelSum[]; errors: { channel_id: number; name: string; error: string }[]
-  daily: ({ day: string; views: number; minutes: number; subs: number; likes: number; engaged_views?: number } & Record<string, number | string>)[]
+  // estimated: dia que o Analytics ainda não liberou (~3 dias de atraso) — views/curtidas tiradas das leituras de cada vídeo
+  daily: ({ day: string; views: number; minutes?: number; subs?: number; likes: number; engaged_views?: number; estimated?: boolean } & Record<string, number | string | boolean | undefined>)[]
   totals: Period & { subscribers: number; total_views: number; published_period: number; comments_total: number }
 }
+
+/** primeiro e último dia estimado (sem dados do Analytics ainda) */
+export const estRange = (d: { day: string; estimated?: boolean }[]): [string, string] | null => {
+  const e = d.filter(r => r.estimated)
+  return e.length ? [e[0].day, e[e.length - 1].day] : null
+}
+export const dm = (v: string) => v.slice(8, 10) + '/' + v.slice(5, 7)
+export const dayLabel = (d: { day: string; estimated?: boolean }[], v: any) =>
+  new Date(v + 'T12:00').toLocaleDateString('pt-BR') + (d.find(r => r.day === v)?.estimated ? ' · estimado' : '')
 
 const tip = { background: '#121816', border: '1px solid #24302b', borderRadius: 10, color: '#e9ece8' }
 
@@ -29,7 +39,10 @@ export default function AllChannels({ scope, onOpen }: { scope: ReactNode; onOpe
   const t = data?.totals
   const d = data?.daily ?? []
   const list = data?.channels ?? []
-  const series = (k: 'views' | 'minutes' | 'subs' | 'likes' | 'engaged_views') => d.map(r => Number(r[k] ?? 0))
+  // minutos/inscritos/engajadas só o Analytics tem: os dias estimados ficam fora dessas linhas
+  const series = (k: 'views' | 'minutes' | 'subs' | 'likes' | 'engaged_views') =>
+    d.filter(r => k === 'views' || k === 'likes' || !r.estimated).map(r => Number(r[k] ?? 0))
+  const est = estRange(d)
   const noData = !!data && !d.some(r => r.views > 0)
 
   // melhor e pior canal em cada coluna (só entre canais com dados)
@@ -93,7 +106,7 @@ export default function AllChannels({ scope, onOpen }: { scope: ReactNode; onOpe
 
       {/* views diárias por canal */}
       <section className="card overflow-hidden">
-        <SectionTitle hint="Uma linha por canal · o YouTube libera os dados com 2 a 3 dias de atraso">Views por dia</SectionTitle>
+        <SectionTitle hint={`Uma linha por canal${est ? ` · a faixa clara (desde ${dm(est[0])}) é estimada pelas nossas leituras, até o YouTube Analytics liberar` : ' · o YouTube libera os dados com 2 a 3 dias de atraso'}`}>Views por dia</SectionTitle>
         <div className="p-4">
           {isLoading ? <Skeleton className="h-64" /> : noData ? (
             <div className="h-40 grid place-items-center text-[13px] text-muted text-center px-6">
@@ -106,7 +119,8 @@ export default function AllChannels({ scope, onOpen }: { scope: ReactNode; onOpe
                     <CartesianGrid stroke="#1d232d" vertical={false} />
                     <XAxis dataKey="day" tick={{ fill: '#8a9690', fontSize: 11 }} tickFormatter={v => v.slice(8, 10) + '/' + v.slice(5, 7)} axisLine={false} tickLine={false} minTickGap={24} />
                     <YAxis tick={{ fill: '#8a9690', fontSize: 11 }} axisLine={false} tickLine={false} allowDecimals={false} />
-                    <Tooltip contentStyle={tip} labelFormatter={v => new Date(v + 'T12:00').toLocaleDateString('pt-BR')}
+                    {est && <ReferenceArea x1={est[0]} x2={est[1]} fill="#d9a53a" fillOpacity={0.07} stroke="none" ifOverflow="extendDomain" />}
+                    <Tooltip contentStyle={tip} labelFormatter={v => dayLabel(d, v)}
                       formatter={(v: any, k: any) => [fmtNum(Number(v)), list.find(c => `c${c.id}` === k)?.name ?? k]} />
                     {list.map(c => <Line key={c.id} type="monotone" dataKey={`c${c.id}`} stroke={seriesColor(channels, c.id)} strokeWidth={2} dot={false}
                       isAnimationActive={false} activeDot={{ r: 4, stroke: '#121816', strokeWidth: 2 }} />)}

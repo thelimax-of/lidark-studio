@@ -211,7 +211,7 @@ def start() -> None:
     _sched.add_job(autopilot_tick, "interval", minutes=1, id="autopilot", max_instances=1, coalesce=True)
     _sched.add_job(keep_ideas_stocked, "interval", hours=3, id="ideas", max_instances=1, coalesce=True,
                    next_run_time=datetime.now() + timedelta(minutes=5))
-    _sched.add_job(collect_metrics, "interval", hours=6, id="metrics", max_instances=1, coalesce=True,
+    _sched.add_job(collect_metrics, "interval", hours=3, id="metrics", max_instances=1, coalesce=True,
                    next_run_time=datetime.now() + timedelta(minutes=2))
     _sched.add_job(trend_radar_all, "cron", hour=7, minute=0, id="radar", max_instances=1, coalesce=True)
     _sched.add_job(fetch_comments, "interval", hours=2, id="comments", max_instances=1, coalesce=True,

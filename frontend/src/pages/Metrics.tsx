@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Area, AreaChart, CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Area, AreaChart, CartesianGrid, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { BarChart3, Sparkles, ExternalLink, ArrowUpDown, RefreshCw, Film } from 'lucide-react'
 import { api, invalidate, onJob, useApi, type Job } from '../api'
 import { act, ChannelScope, ChannelTag, Empty, fmtNum, PageHeader, toast, useChannel, useScope } from '../ui'
 import { ExperimentsCard, YppCard } from './Growth'
-import type { Overview } from './Overview'
+import { dayLabel, dm, estRange, type Overview } from './Overview'
 import { ChampionsCard, toLong } from './Champions'
 
 type Row = {
@@ -33,7 +33,7 @@ export default function Metrics() {
     if (j) setSyncJob(j.id)
   }
   const { data: rows = [] } = useApi<Row[]>(all ? '/performance' : cid ? `/channels/${cid}/performance` : null)
-  const { data: one } = useApi<{ rows: { day: string; views: number; minutes: number; subs: number; likes: number; engaged_views?: number }[]; connected: boolean; error?: string }>(cid ? `/channels/${cid}/analytics?days=${days}` : null)
+  const { data: one } = useApi<{ rows: { day: string; views: number; minutes?: number; subs?: number; likes: number; engaged_views?: number; estimated?: boolean }[]; connected: boolean; error?: string }>(cid ? `/channels/${cid}/analytics?days=${days}` : null)
   const { data: ov } = useApi<Overview>(all ? `/overview?days=${days}` : null)
   // "Todos os canais": a série diária já vem somada pelo backend
   const daily = all ? (ov && { rows: ov.daily, connected: true, error: ov.errors.map(e => `${e.name}: ${e.error}`).join(' · ') || undefined }) : one
@@ -42,6 +42,8 @@ export default function Metrics() {
   const d = daily?.rows ?? []
   const sum = (k: 'views' | 'minutes' | 'subs' | 'likes' | 'engaged_views') => d.reduce((n, r) => n + (r[k] ?? 0), 0)
   const engaged = d.some(r => r.engaged_views !== undefined)
+  const est = estRange(d)
+  const upTo = est ? ` · até ${dm(d.filter(r => !r.estimated).at(-1)?.day ?? est[0])}` : ''  // só o Analytics tem esses números
   const subs = all ? (ov?.totals.subscribers ?? 0) : (channel?.stats?.subscribers ?? 0)
   const totalViews = all ? (ov?.totals.total_views ?? 0) : (channel?.stats?.views ?? 0)
   const ret = rows.filter(r => r.retention > 0)
@@ -53,7 +55,7 @@ export default function Metrics() {
 
   return (
     <>
-      <PageHeader title="Métricas" subtitle={`${all ? 'Todos os canais' : channel.name} · dados do YouTube Analytics (atualizados a cada 6 h)`}
+      <PageHeader title="Métricas" subtitle={`${all ? 'Todos os canais' : channel.name} · dados do YouTube Analytics (atualizados a cada 3 h)`}
         actions={<div className="flex flex-wrap items-center gap-2">
           <ChannelScope all={all} onChange={setAll} />
           {!all && channel.connected && <button className="btn" onClick={sync} disabled={syncJob !== null}>
@@ -66,17 +68,17 @@ export default function Metrics() {
       {!all && <div className="space-y-5 mb-6"><YppCard channelId={channel.id} /><ExperimentsCard channelId={channel.id} /></div>}
 
       <div className={`grid grid-cols-2 gap-4 mb-6 ${engaged ? 'lg:grid-cols-6' : 'lg:grid-cols-5'}`}>
-        <Tile label="Inscritos" v={fmtNum(subs)} sub={`+${fmtNum(sum('subs'))} em ${days} dias`} />
+        <Tile label="Inscritos" v={fmtNum(subs)} sub={`+${fmtNum(sum('subs'))} em ${days} dias${upTo}`} />
         <Tile label={`Views (${days} dias)`} v={fmtNum(sum('views'))} sub={`${fmtNum(totalViews)} no total`} />
-        {engaged && <Tile label="Views engajadas" v={fmtNum(sum('engaged_views'))} sub={`${days} dias`} />}
-        <Tile label="Horas assistidas" v={fmtNum(Math.round(sum('minutes') / 60))} sub={`${days} dias`} />
+        {engaged && <Tile label="Views engajadas" v={fmtNum(sum('engaged_views'))} sub={`${days} dias${upTo}`} />}
+        <Tile label="Horas assistidas" v={fmtNum(Math.round(sum('minutes') / 60))} sub={`${days} dias${upTo}`} />
         <Tile label="Retenção média" v={`${avgRet.toFixed(0)}%`} sub="dos vídeos assistidos" />
         <Tile label="Curtidas" v={fmtNum(sum('likes'))} sub={`${days} dias`} />
       </div>
 
       <div className="card p-5 mb-6">
         <div className="text-sm font-semibold mb-1">Views por dia{all && <span className="text-muted font-normal"> · soma dos canais</span>}</div>
-        <div className="text-xs text-muted mb-4">{daily?.error ? `Analytics indisponível: ${daily.error}` : 'Passe o mouse para ver cada dia · o YouTube libera os dados com ~2 dias de atraso'}</div>
+        <div className="text-xs text-muted mb-4">{daily?.error ? `Analytics indisponível: ${daily.error}` : est ? `Passe o mouse para ver cada dia · a faixa clara (desde ${dm(est[0])}) é estimada pelas nossas leituras de cada vídeo, até o YouTube Analytics liberar (~3 dias)` : 'Passe o mouse para ver cada dia · o YouTube libera os dados com ~3 dias de atraso'}</div>
         <div className="h-64">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={d} margin={{ left: -10, right: 8, top: 4 }}>
@@ -85,7 +87,8 @@ export default function Metrics() {
               <XAxis dataKey="day" tick={{ fill: '#8a9690', fontSize: 11 }} tickFormatter={v => v.slice(8, 10) + '/' + v.slice(5, 7)} axisLine={false} tickLine={false} minTickGap={24} />
               <YAxis tick={{ fill: '#8a9690', fontSize: 11 }} axisLine={false} tickLine={false} allowDecimals={false} />
               <Tooltip contentStyle={{ background: '#121816', border: '1px solid #24302b', borderRadius: 10, color: '#e9ece8' }}
-                labelFormatter={v => new Date(v + 'T12:00').toLocaleDateString('pt-BR')} formatter={(v: any) => [fmtNum(Number(v)), 'views']} />
+                labelFormatter={v => dayLabel(d, v)} formatter={(v: any) => [fmtNum(Number(v)), 'views']} />
+              {est && <ReferenceArea x1={est[0]} x2={est[1]} fill={GOLD} fillOpacity={0.07} stroke="none" ifOverflow="extendDomain" />}
               <Area type="monotone" dataKey="views" stroke={GOLD} strokeWidth={2} fill="url(#g)" isAnimationActive={false} activeDot={{ r: 5, stroke: '#121816', strokeWidth: 2 }} />
             </AreaChart>
           </ResponsiveContainer>

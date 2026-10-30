@@ -98,7 +98,7 @@ export function useLiveEvents() {
         listeners.forEach(l => l(job))
         invalidate('/jobs')
         if (job.status === 'done' || job.status === 'failed') {
-          ;['/ideas', '/scripts', '/videos', '/dashboard', '/channels', '/publications'].forEach(invalidate)
+          ;['/ideas', '/scripts', '/videos', '/dashboard', '/channels', '/publications', '/overview', '/performance'].forEach(invalidate)
         }
       })
       es.onerror = () => { setConnected(false); es?.close(); retry = window.setTimeout(connect, 3000) }
