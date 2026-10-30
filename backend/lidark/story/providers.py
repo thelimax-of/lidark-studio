@@ -557,7 +557,8 @@ def generate(prompt: str, w: int, h: int, seed: int, kind: str, *, only: list[st
         except Exception:  # noqa: BLE001
             continue
         pr = prompt
-        for attempt in range(3):
+        empty_only = kind in ("location", "insert", "prop") and init is None  # cenário/objeto: nenhuma pessoa no quadro
+        for attempt in range(5 if empty_only else 3):
             try:
                 t0 = time.time()
                 if name == "local":
@@ -566,6 +567,14 @@ def generate(prompt: str, w: int, h: int, seed: int, kind: str, *, only: list[st
                     break  # img2img só no worker local
                 else:
                     img = p.run(pr, w, h, seed + attempt * 7919, kind)
+                if empty_only:
+                    from .people import has_people
+                    why = has_people(img)
+                    if why:
+                        if log_fn:
+                            log_fn(f"{name}: cenário com {why} — refazendo sem pessoas")
+                        pr = prompt + ", completely empty scene, deserted, unoccupied, no humans"
+                        continue
                 img.save(out)
                 out.with_suffix(".json").write_text(json.dumps({
                     "provider": name, "model": (model or conf().get("local_model")) if name == "local" else getattr(p, "model", name),

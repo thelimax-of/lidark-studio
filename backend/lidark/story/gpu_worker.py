@@ -37,6 +37,27 @@ GEN_LOCK = threading.Lock()
 
 
 # ---------------------------------------------------------------- trava de GPU entre processos
+_CLIP: dict = {}
+_PEOPLE_TXT = ["an illustration of a person", "an illustration of a human face",
+               "a picture of an empty place with no people", "a close-up of an object with no people"]
+
+
+def people_score(b64: str) -> float:
+    """Probabilidade (0-1) de haver pessoa/rosto na imagem — CLIP ViT-B/32 em data/imggen/models/clip (~0,3 GB de VRAM)."""
+    import torch
+    from PIL import Image
+    from transformers import CLIPModel, CLIPProcessor
+    if not _CLIP:
+        d = Path(__file__).resolve().parents[3] / "data" / "imggen" / "models" / "clip"
+        _CLIP["m"] = CLIPModel.from_pretrained(str(d), torch_dtype=torch.float16).to("cuda").eval()
+        _CLIP["p"] = CLIPProcessor.from_pretrained(str(d))
+    img = Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
+    x = _CLIP["p"](text=_PEOPLE_TXT, images=img, return_tensors="pt", padding=True).to("cuda")
+    with torch.no_grad():
+        pr = _CLIP["m"](**{k: (v.half() if v.dtype == torch.float32 else v) for k, v in x.items()}).logits_per_image.softmax(-1)[0]
+    return round(float(pr[0] + pr[1]), 3)
+
+
 class GpuLock:
     def __enter__(self):
         import msvcrt
@@ -197,6 +218,12 @@ class H(BaseHTTPRequestHandler):
             self._json(200, {"ok": True})
             threading.Thread(target=lambda: (time.sleep(0.3), os._exit(0)), daemon=True).start()
             return
+        if self.path.startswith("/people"):  # cenário/objeto tem gente? (CLIP, entende ilustração)
+            try:
+                with GEN_LOCK:
+                    return self._json(200, {"person": people_score(body["image"])})
+            except Exception as e:  # noqa: BLE001
+                return self._json(500, {"error": str(e)[:300]})
         if not self.path.startswith("/generate"):
             return self._json(404, {"error": "?"})
         STATE["queue"] += 1
