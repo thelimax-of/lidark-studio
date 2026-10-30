@@ -110,11 +110,18 @@ def autopilot_tick() -> None:
                 pending = [datetime.fromisoformat(v) for k, v in st.items()
                            if k.startswith(f"{ch.id}|") and isinstance(v, str) and v[:1].isdigit()]
                 why = posting_times.conflict(ch, publish_at, fmt, extra=pending)
+                if why and not posting_times.conflict(ch, publish_at, fmt, extra=pending, sisters=False):
+                    # só um canal irmão no caminho (a < 2 h): empurra para o próximo horário livre em até 3 h
+                    moved = posting_times.next_free(ch, publish_at, fmt, extra=pending, max_hours=3)
+                    if moved:
+                        log.info("piloto automático %s: %s → postagem às %s", key, why, moved.astimezone(posting_times.TZ).strftime("%H:%M"))
+                        publish_at, why = moved.astimezone(), None
                 if why:
                     st[key] = "skip"
                     log.info("piloto automático pulou %s: %s", key, why)
                     continue
                 st[key] = publish_at.isoformat()
+                _save(st)  # os outros canais deste mesmo giro já enxergam este horário (espaço entre canais irmãos)
                 enqueue("autopilot", title=f"Piloto automático: {ch.name} ({slot}{' · auto' if auto else ''})", channel_id=ch.id,
                         payload={"publish_at": publish_at.isoformat(), "format": fmt})
                 log.info("piloto automático disparado: %s", key)
@@ -228,5 +235,15 @@ def start() -> None:
                    next_run_time=datetime.now() + timedelta(minutes=12))
     _sched.add_job(_notify.scan_jobs, "interval", minutes=5, id="notify_scan", max_instances=1, coalesce=True)
     _sched.add_job(_notify.prune, "cron", hour=4, minute=10, id="notify_prune", max_instances=1, coalesce=True)
+    # aprovação pelo celular: botões Aprovar/Recusar do ntfy chamam o notebook na rede local (mesmo Wi-Fi)
+    _sched.add_job(_notify.scan_approvals, "interval", minutes=10, id="phone_approval", max_instances=1, coalesce=True,
+                   next_run_time=datetime.now() + timedelta(minutes=3))
+    try:
+        if config.get("ntfy_enabled"):  # sem avisos no celular, nem abre a porta na rede local
+            _notify.start_lan_server()
+    except Exception as e:  # noqa: BLE001
+        log.warning("servidor de aprovação pelo celular: %s", e)
+    _sched.add_job(lambda: enqueue("enem_bank_ideas", title="Pautas do banco ENEM"), "cron", hour=8, minute=10,
+                   id="enem_bank", max_instances=1, coalesce=True)
     _sched.start()
     log.info("agendador iniciado")

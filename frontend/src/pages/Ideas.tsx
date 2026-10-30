@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   Sparkles, PenLine, Check, X, FileText, ShieldCheck, RefreshCw, Trash2, ExternalLink, Lightbulb, Clapperboard, Flame,
-  Zap, TrendingUp, Quote, Search, Target, Copy,
+  Zap, TrendingUp, Quote, Search, Target, Copy, MessageCircle, GraduationCap,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { api, invalidate, useApi, type Idea } from '../api'
@@ -22,6 +22,18 @@ const CRIT: Record<string, string> = {
 }
 const BASE_CRIT = ['gancho', 'curiosidade', 'relevancia', 'emocao', 'visual', 'compartilhamento', 'originalidade', 'veracidade']
 const VIRAL: Record<string, string> = { busca: 'Busca', curiosidade: 'Curiosidade', emocao: 'Emoção', momento: 'Momento' }
+
+/** Origem da pauta com destaque: pergunta de um espectador (comentário) ou banco de questões no estilo ENEM. */
+function OriginBadge({ i }: { i: Idea }) {
+  if (i.origin === 'comment') {
+    const who = i.tags?.find(t => t.startsWith('autor:'))?.slice(6)
+    return <span className="badge badge-accent" data-tip={who ? `Pergunta de ${who} nos comentários` : 'Pergunta do público nos comentários'}>
+      <MessageCircle size={11} />Comentário{who ? ` · ${who}` : ''}</span>
+  }
+  if (i.origin === 'enem_bank') return <span className="badge badge-ok" data-tip="Tema recorrente no ENEM (pergunta autoral no estilo da prova; provas oficiais: INEP)"><GraduationCap size={11} />Banco ENEM</span>
+  if (i.origin === 'trend') return <span className="badge badge-warn"><Flame size={11} />Tendência{i.tags?.[1]?.includes('alta') ? ' · urgente' : ''}</span>
+  return null
+}
 
 // ---------------------------------------------------------------- campos novos da nota (opcionais; o backend pode não mandar)
 
@@ -138,8 +150,8 @@ export default function Ideas() {
                       </div>
                     </td>
                     <td className="whitespace-nowrap text-muted">
-                      {i.origin === 'trend' ? <span className="badge badge-warn"><Flame size={11} />Tendência{i.tags?.[1]?.includes('alta') ? ' · urgente' : ''}</span>
-                        : <span>{i.origin === 'manual' ? 'Sua ideia' : 'IA'}</span>} <span className="text-faint">· {i.format === 'long' ? 'Longo' : 'Short'}</span>
+                      {['trend', 'comment', 'enem_bank'].includes(i.origin) ? <OriginBadge i={i} />
+                        : <span>{i.origin === 'manual' ? 'Sua ideia' : i.origin === 'champion' ? 'Short campeão' : 'IA'}</span>} <span className="text-faint">· {i.format === 'long' ? 'Longo' : 'Short'}</span>
                     </td>
                     <td><Status s={i.fact_status} /></td>
                     <td><Status s={i.status} /></td>
@@ -200,7 +212,7 @@ function IdeaModal({ base, onClose }: { base: IdeaX; onClose: () => void }) {
           <div className="flex flex-wrap gap-2 mt-3">
             <Status s={idea.status} /><Status s={idea.fact_status} />
             <ViralBadge v={x.viralScore} />
-            {idea.origin === 'trend' && <span className="badge badge-warn"><Flame size={11} />Tendência</span>}
+            <OriginBadge i={idea} />
             <span className="badge text-muted">{idea.format === 'long' ? 'Vídeo longo' : 'Short'}</span>
           </div>
         </div>

@@ -235,14 +235,24 @@ RETENTION_SHORT = """ARQUITETURA DE RETENÇÃO (Short):
 - Escada de tensão: cada fato mais forte que o anterior; o mais surpreendente fica para o fim (PAYOFF claro e satisfatório).
 - Zero gordura: sem introdução, sem resumo do que vai ser dito, sem repetir informação, sem frase morna. Se uma frase pode
   sair sem perder nada, ela sai.
-- LOOP para o replay: a última frase da história (logo antes do CTA) ecoa a imagem/palavra do gancho, para o começo do
-  vídeo parecer a continuação do fim."""
+- O fechamento (com ou sem loop) é o pedido em VARIEDADE — nem todo Short termina igual."""
+
+PROSODY_RULES = """PROSÓDIA POR CENA (campo "delivery" — a voz segue à risca; varie, nunca o roteiro inteiro no mesmo ritmo):
+- "pace": "fast" no gancho e em trechos de ação/lista; "slow" na revelação, no payoff e em dado pesado; "normal" no resto.
+- "pause_after_ms": silêncio depois da cena, de 0 a 900 — 400 a 700 logo antes de uma revelação ou depois de um dado
+  chocante; 0 no meio de uma sequência rápida. No máximo 3 pausas acima de 400 num Short.
+- "emphasis": 0 a 2 palavras EXATAS da cena que a voz acentua (podem ser as mesmas do destaque da legenda).
+- "emotion": tensão, surpresa, mistério, emoção, empolgação, seriedade, humor ou neutra."""
+
+DELIVERY_PACES = ("fast", "normal", "slow")
+DELIVERY_EMOTIONS = ("tensão", "surpresa", "mistério", "emoção", "empolgação", "seriedade", "humor", "neutra")
 
 RETENTION_LONG = """ARQUITETURA DE RETENÇÃO (vídeo longo — os primeiros 30 s decidem a curva inteira):
 - COLD OPEN (0-30 s): comece no momento mais intrigante, sem vinheta e sem "olá"; em até 4 frases diga o que está em jogo
   e PROMETA o que o espectador vai entender no fim (e cumpra). Confirme logo o título/thumbnail.
-- CAPÍTULOS como episódios: cada um abre com uma pergunta e termina com uma revelação + um gancho para o próximo
-  ("mas isso ainda não explica por que..."). Nada de capítulo que só "contextualiza".
+- CAPÍTULOS como episódios: cada um abre com uma pergunta e termina com uma revelação + um CLIFFHANGER real para o
+  próximo ("mas isso ainda não explica por que..."), com palavras diferentes a cada capítulo. Nada de capítulo que só
+  "contextualiza".
 - RE-GANCHOS a cada ~45-60 s (virada, dado chocante, "e é aqui que tudo muda"); um re-gancho FORTE por volta de 1/3 e de 2/3
   do vídeo, onde a curva de retenção costuma cair.
 - Ritmo: alterne trechos de narração rápida com uma frase curta e seca de impacto; personagens com nome e motivação.
@@ -319,6 +329,12 @@ def discover_ideas(ch: Channel, count: int = 10, seed: str = "", fmt: str = "sho
             material.append(f"- (notícia) {h['title']}")
     used = existing_titles(ch.id)
     enem = is_enem_channel(ch)
+    if enem:  # temas recorrentes das provas do ENEM (banco curado): inspiração com fatos já conferidos
+        try:
+            from .enem_bank import prompt_material
+            material += prompt_material(ch, 5)
+        except Exception:  # noqa: BLE001
+            log.exception("banco ENEM")
     ask = count + min(4, max(2, count // 2))  # pede algumas a mais e fica com as de maior potencial
     fmt_txt = ("SHORTS verticais (30 a 60 s): UMA ideia só, que cabe numa frase e tem uma revelação forte no fim"
                if fmt == "short" else
@@ -562,11 +578,17 @@ def write_script(ch: Channel, idea: Idea, fmt: str | None = None, extra: str = "
                  plan: dict[str, Any] | None = None) -> dict[str, Any]:
     from . import variety
     fmt = fmt or idea.format
-    plan = plan or variety.plan(ch, fmt)
+    plan = _plan_for_idea(ch, idea, fmt, plan or variety.plan(ch, fmt))
+    extra = (extra + chr(10) + idea_extra(ch, idea, fmt)).strip()
     if str(plan.get("cta_style")) == variety.NEXT_CTA and not plan.get("next_title"):
         nxt = variety.next_idea(ch, idea.id, fmt)
         if nxt:
             plan = {**plan, "next_idea": nxt.id, "next_title": nxt.title}
+    if fmt == "long" and not plan.get("next_title"):  # série maratonável: o fim puxa o próximo episódio (pauta real)
+        nxt = variety.next_idea(ch, idea.id, "long")
+        if nxt and nxt.format == "long":
+            plan = {**plan, "next_idea": nxt.id, "next_title": nxt.title, "next_episode": True}
+            _tag_next_episode(nxt.id, plan.get("series"))
     mins = next((str(t)[8:] for t in idea.tags or [] if str(t).startswith("minutos:")), "")
     if fmt == "long" and mins and not plan.get("seconds"):  # duração pedida na pauta (ex.: revisão ENEM de 10 min)
         try:
@@ -588,6 +610,23 @@ def write_script(ch: Channel, idea: Idea, fmt: str | None = None, extra: str = "
     n_scenes = (f'{max(6, int(seconds) // 5)} a {max(6, int(seconds) // 5) + 3}' if fmt == 'short'
                 else f'{max(25, int(seconds) // 15)} a {max(40, int(seconds) // 9)}')
     enem = is_enem_channel(ch)
+    loop = fmt == "short" and bool(plan.get("loop"))
+    if loop:
+        ending = ("- Final: a revelação/virada, depois o CTA curto (até 12 palavras) no fim da PENÚLTIMA cena e, por último, a\n"
+                  "  cena de LOOP pedida em VARIEDADE (\"loop\": true), que emenda na 1ª frase. Nada depois dela.")
+    else:
+        ending = ("- Final com a revelação/virada e, por ÚLTIMO, o CTA curto descrito em VARIEDADE. O roteiro TERMINA no CTA: nada depois\n"
+                  "  dele (sem \"Mas afinal...\", sem pergunta solta, sem reticências).\n- "
+                  + ('CTA curto: no máximo 12 palavras.' if fmt == 'short' else 'CTA curto e natural, sem encerramento longo.'))
+    desc_spec = ("descrição única para o YouTube, 2-3 frases escritas do zero para ESTE vídeo (sem frases-padrão)" if fmt == "short"
+                 else "descrição de 200 a 350 palavras escrita do zero para ESTE vídeo: 1ª frase com o termo de busca principal "
+                      "(de preferência como a pessoa pergunta: 'o que foi...', 'por que...', '... resumo'), depois 2-3 parágrafos "
+                      "curtos com o que o vídeo explica (nomes, datas, conceitos, variações dos termos de busca em frases de "
+                      "verdade) e a menção à série; sem lista de palavras-chave, sem links")
+    short_json = ('\n  "opening_options": [{"type": "impact|question|motion", "text": "1ª frase falada", "onscreen": "texto na tela ou vazio", '
+                  '"motion": "movimento visual dos 2 s ou vazio"}, ...3, uma de cada tipo],' if fmt == "short" else "")
+    myth_json = ('\n  "hook_style_used": "correcao ou contraintuitivo (o estilo de gancho que você de fato usou)",'
+                 if plan.get("hook_style") == variety.MYTH_HOOK else "")
     prompt = f"""{channel_brief(ch)}
 
 {learning_context(ch.id, purpose='script')}
@@ -619,13 +658,13 @@ Você é o roteirista-chefe do canal, especialista em retenção no YouTube. Esc
 
 {TTS_RULES}
 
+{PROSODY_RULES}
+
 FATOS E FORMA:
 - SÓ use fatos confirmados pelas fontes. Datas, nomes e números precisos; nada inventado para "dar emoção".
 - Mostre, não explique: cenas concretas (quem, onde, o que se via/ouvia) em vez de frases abstratas.
 {'- Ligue ao ENEM de forma natural e variada (nem sempre com a mesma frase): o conceito, a causa/consequência ou como a questão costuma aparecer.' if enem else ''}
-- Final com a revelação/virada e, por ÚLTIMO, o CTA curto descrito em VARIEDADE. O roteiro TERMINA no CTA: nada depois
-  dele (sem "Mas afinal...", sem pergunta solta, sem reticências).
-- {('CTA curto: no máximo 12 palavras, logo depois da frase de loop.' if fmt == 'short' else 'CTA curto e natural, sem encerramento longo.')}
+{ending}
 
 CENAS E IMAGENS:
 - Divida em cenas de {scene_secs} segundos de fala. Cada cena tem UMA imagem que mostra exatamente o que a narração diz.
@@ -657,9 +696,10 @@ CENAS E IMAGENS:
 Responda JSON:
 {{"title": "o melhor título (35-50 caracteres, máx 60, assunto nas primeiras palavras)",
   "title_options": ["...", "...", "..."],
-  "hook": "primeira frase (= início da cena 1)",
-  "scenes": [{{"text": "narração da cena", "visual": {{"kind": "real|ai|timeline|counter|map|dossier|versus|quote|list", "query": "...", "query_pt": "...", "prompt": "...", "data": {{}}}}, "emphasis": ["..."], "label": "..."}}],
-  "description": "descrição única para o YouTube, 2-3 frases escritas do zero para ESTE vídeo (sem frases-padrão)",
+  "hook": "primeira frase (= início da cena 1)",{short_json}{myth_json}
+  "scenes": [{{"text": "narração da cena", "visual": {{"kind": "real|ai|timeline|counter|map|dossier|versus|quote|list", "query": "...", "query_pt": "...", "prompt": "...", "data": {{}}}}, "emphasis": ["..."], "label": "...",
+    "delivery": {{"pace": "fast|normal|slow", "pause_after_ms": 0, "emphasis": ["..."], "emotion": "..."}}{', "chapter": "só na 1ª cena de cada capítulo"' if fmt == 'long' else ''}{', "loop": true só na última cena' if loop else ''}}}],
+  "description": "{desc_spec}",
   "tags": ["5 a 10 tags"],
   "hashtags": ["#2a3hashtags"],
   "thumbnail_text": "2-4 palavras que completam o título",
@@ -671,7 +711,206 @@ Responda JSON:
     extras = {k: v for k, v in (("title_options", data.get("title_options")), ("thumb_options", data.get("thumbnail_options")),
                                 ("pinned_comment", data.get("pinned_comment"))) if v}
     data["variety"] = {**plan, **extras}  # guardado no plano: miniaturas A/B e comentário do canal reaproveitam
+    used = str(data.get("hook_style_used") or "")
+    if plan.get("hook_style") == variety.MYTH_HOOK and used in variety.HOOKS and used != variety.MYTH_HOOK:
+        # o tema não tinha um equívoco real para corrigir: o experimento registra o estilo que foi ao ar
+        data["variety"].update(hook_style=used, hook_style_planned=variety.MYTH_HOOK)
+    scenes = [x for x in (data.get("scenes") or []) if isinstance(x, dict)]
+    if fmt == "short":
+        scenes = _apply_opening(data, scenes)
+        if loop and scenes:
+            scenes = [dict(x, loop=False) if x.get("loop") else x for x in scenes[:-1]] + [dict(scenes[-1], loop=True)]
+        elif scenes:
+            scenes = [{k: v for k, v in x.items() if k != "loop"} for x in scenes]
+    data["scenes"] = normalize_delivery(scenes, fmt)
+    if fmt == "long":
+        data["description"] = long_description(str(data.get("description") or ""), data["scenes"], data["variety"])
+    data["description"] = idea_description(idea, str(data.get("description") or ""))
     return data
+
+
+def _tag_value(idea: Idea, prefix: str) -> str:
+    return next((str(t)[len(prefix):] for t in idea.tags or [] if str(t).startswith(prefix)), "")
+
+
+def _plan_for_idea(ch: Channel, idea: Idea, fmt: str, plan: dict[str, Any]) -> dict[str, Any]:
+    """Ajustes do plano pedidos pela pauta (loop, duração, série) + freio do YPP para estrutura forçada pela pauta."""
+    from . import variety
+    plan = dict(plan)
+    tags = [str(t) for t in idea.tags or []]
+    if fmt == "short":
+        if "loop" in tags:  # ex.: banco de questões ENEM (termina na alternativa certa e emenda no começo)
+            plan["loop"] = True
+        secs = _tag_value(idea, "segundos:")
+        if secs:
+            try:
+                plan["seconds"] = max(15, min(175, int(float(secs))))
+                plan["duration"] = variety.duration_band(plan["seconds"])
+            except ValueError:
+                pass
+    serie = _tag_value(idea, "serie:")
+    if fmt == "long" and serie:  # episódio prometido no fim do anterior: entra na mesma série/playlist
+        plan["series"] = serie[:60]
+    try:
+        over = variety.overused(ch.id, "structure")
+        cur = plan.get("structure")
+        if cur in over and not plan.get("ypp_brake"):
+            # estrutura imposta pela pauta (mito × verdade, pacote ENEM) já passa de 30% dos últimos roteiros: troca a
+            # forma de contar, mantendo o conteúdo (o desmentido continua pelo gancho de correção + checagem)
+            opts = [k for k, v in variety.STRUCTURES.items() if fmt in v["formats"] and k not in over and k != cur]
+            if opts:
+                new = variety._pick(opts, [h.get("structure", "") for h in variety.recent_plans(ch.id)], 3)
+                plan.update(structure=new, structure_forced=cur, ypp_brake=True,
+                            music_mood=variety.STRUCTURES[new]["mood"])
+                if cur == "mito_verdade" and variety.MYTH_HOOK not in variety.overused(ch.id, "hook_style"):
+                    plan["hook_style"] = variety.MYTH_HOOK
+                if not serie:
+                    plan["series"] = variety.series_names(ch).get(new) or variety.STRUCTURES[new]["series"]
+                log.info("freio YPP: estrutura %s → %s (%s)", cur, new, ch.name)
+    except Exception:  # noqa: BLE001
+        log.exception("freio YPP")
+    return plan
+
+
+def idea_extra(ch: Channel, idea: Idea, fmt: str) -> str:
+    """Instruções extras que dependem da origem da pauta (banco de questões ENEM, pergunta de um espectador)."""
+    key = _tag_value(idea, "enem_bank:")
+    if key:
+        try:
+            from . import enem_bank
+            return enem_bank.script_extra(key, fmt)
+        except Exception:  # noqa: BLE001
+            log.exception("banco ENEM")
+    if idea.origin == "comment":
+        who = _tag_value(idea, "autor:") or "um espectador"
+        q = _tag_value(idea, "pergunta:")
+        return (f"ESTE VÍDEO RESPONDE A PERGUNTA DE UM ESPECTADOR ({who}): \"{q}\". Cite a pessoa UMA vez, de forma natural, "
+                f"na cena 1 ou 2 (ex.: \"{who} perguntou...\", com palavras suas), e responda de verdade, só com fatos das fontes.")
+    return ""
+
+
+def idea_description(idea: Idea, desc: str) -> str:
+    if _tag_value(idea, "enem_bank:"):
+        from .enem_bank import INEP_LINE
+        if "INEP" not in desc.upper():
+            desc = (desc.strip() + "\n\n" + INEP_LINE).strip()
+    elif idea.origin == "comment":
+        who = _tag_value(idea, "autor:")
+        if who and who not in desc:
+            desc = (desc.strip() + f"\n\nRespondendo a pergunta de {who} nos comentários — mande a sua também!").strip()
+    return desc
+
+
+def _tag_next_episode(idea_id: int, series: str | None) -> None:
+    if not series:
+        return
+    with session() as s:
+        nx = s.get(Idea, idea_id)
+        if nx and not any(str(t).startswith("serie:") for t in nx.tags or []):
+            nx.tags = list(nx.tags or []) + [f"serie:{series}"[:80]]
+            s.add(nx)
+            s.commit()
+
+
+def _first_sentence(text: str) -> str:
+    import re
+    parts = re.split(r"(?<=[.!?…])\s+", (text or "").strip())
+    return parts[0] if parts else ""
+
+
+def _apply_opening(data: dict[str, Any], scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """As 3 aberturas do Short: valida, alinha a escolhida com a fala real da cena 1 e grava no plano
+    (opening_type é o que o aprendizado compara no 'assistiu × deslizou')."""
+    from .variety import OPENING_TYPES
+    plan = data.setdefault("variety", {})
+    want = plan.get("opening_type") if plan.get("opening_type") in OPENING_TYPES else "impact"
+    opts: list[dict[str, str]] = []
+    for o in data.get("opening_options") or []:
+        if not isinstance(o, dict):
+            continue
+        t, text = str(o.get("type") or "").strip().lower(), str(o.get("text") or "").strip()
+        if t in OPENING_TYPES and text and all(x["type"] != t for x in opts):
+            opts.append({"type": t, "text": text[:220], "onscreen": str(o.get("onscreen") or "").strip()[:80],
+                         "motion": str(o.get("motion") or "").strip()[:220]})
+    if not scenes:
+        return scenes
+    first = _first_sentence(scenes[0].get("text", ""))
+    chosen = next((o for o in opts if o["type"] == want), None)
+    if not chosen:
+        chosen = {"type": want, "text": first, "onscreen": "", "motion": ""}
+        opts.append(chosen)
+    chosen["text"] = first or chosen["text"]  # a fala que de fato abre o vídeo
+    if chosen["type"] == "question" and not chosen["onscreen"] and first.endswith("?") and len(first.split()) <= 8:
+        chosen["onscreen"] = first
+    real = chosen["type"]
+    if (real == "question" and not chosen["onscreen"]) or (real == "motion" and not chosen["motion"]):
+        real = "impact"  # sem o elemento do tipo, a abertura é na prática uma frase de impacto: mede como tal
+    plan["opening_type"] = real
+    if real != want:
+        plan["opening_type_planned"] = want
+    plan["opening_options"] = opts
+    plan["opening"] = {**chosen, "type": real}
+    data["opening_options"], data["opening"] = opts, plan["opening"]
+    cue = {k: v for k, v in (("type", real), ("onscreen", chosen["onscreen"]), ("motion", chosen["motion"])) if v}
+    return [dict(scenes[0], opening=cue)] + scenes[1:]
+
+
+def normalize_delivery(scenes: list[dict[str, Any]], fmt: str = "short") -> list[dict[str, Any]]:
+    """Contrato da prosódia por cena (lido pelo tts.py): delivery = {pace: fast|normal|slow, pause_after_ms: int,
+    emphasis: [palavras da cena], emotion: str}. Campo opcional: cena sem delivery fala no ritmo normal."""
+    max_pause = 900 if fmt == "short" else 1500
+    out, long_pauses = [], 0
+    for i, sc in enumerate(scenes):
+        d = sc.get("delivery")
+        if not isinstance(d, dict) or not d:
+            if i == 0 and sc.get("text"):
+                d = {}
+            else:
+                out.append({k: v for k, v in sc.items() if k != "delivery"})
+                continue
+        pace = str(d.get("pace") or "").strip().lower()
+        pace = pace if pace in DELIVERY_PACES else ("fast" if i == 0 else "normal")
+        try:
+            pause = max(0, min(max_pause, int(float(d.get("pause_after_ms") or 0))))
+        except (TypeError, ValueError):
+            pause = 0
+        if sc.get("loop"):
+            pause = 0  # a emenda do loop não pode ter silêncio
+        if fmt == "short" and pause > 400:
+            long_pauses += 1
+            if long_pauses > 3:
+                pause = 300
+        low = (sc.get("text") or "").lower()
+        emph = [str(w).strip() for w in (d.get("emphasis") or []) if isinstance(w, str) and str(w).strip()
+                and str(w).strip().lower() in low][:2]
+        emo = str(d.get("emotion") or "").strip().lower()
+        out.append({**sc, "delivery": {"pace": pace, "pause_after_ms": pause, "emphasis": emph,
+                                        "emotion": emo if emo in DELIVERY_EMOTIONS else "neutra"}})
+    return out
+
+
+def long_description(desc: str, scenes: list[dict[str, Any]], plan: dict[str, Any]) -> str:
+    """Vídeo longo vive de busca: descrição de 200+ palavras. Se a IA escreveu menos, completa com o que o vídeo
+    realmente cobre (títulos dos capítulos, que já usam termos de busca) e a série — nada inventado."""
+    desc = desc.strip()
+    if len(desc.split()) >= 200:
+        return desc
+    chapters = list(dict.fromkeys(str(s["chapter"]).strip() for s in scenes if s.get("chapter")))
+    parts = [desc]
+    if chapters:
+        items = chapters[:-1]
+        txt = ", ".join(c[0].lower() + c[1:] if c[:1].isupper() and not c[1:2].isupper() else c for c in items)
+        last = chapters[-1]
+        parts.append("Neste vídeo você vai entender, passo a passo: " + (f"{txt} e {last[0].lower() + last[1:]}" if items else last) + ".")
+    for sc in scenes[1:]:
+        if len(" ".join(parts).split()) >= 200:
+            break
+        if sc.get("chapter") and sc.get("text") and len(sc["text"].split()) >= 8:
+            parts.append(f"{sc['chapter']}: {sc['text'].strip()}")
+    series = plan.get("series")
+    if series and series not in " ".join(parts):
+        parts.append(f"Este vídeo é um episódio da série “{series}”. Maratone os outros episódios na playlist do canal.")
+    return "\n\n".join(p for p in parts if p)
 
 
 def _clean_title(t: Any) -> str:
@@ -718,7 +957,15 @@ def improve_hook(ch: Channel, data: dict[str, Any], plan: dict[str, Any], log=la
         recent = recent_plans(ch.id, 10)
         recent_styles = [h.get("hook_style") for h in recent[:2] if h.get("hook_style")]
         cur = plan.get("hook_style", "")
-        alt_styles = [k for k in HOOKS if k != cur and k not in recent_styles][:5] or [k for k in HOOKS if k != cur]
+        from .variety import MYTH_HOOK, OPENING_TYPES, overused
+        blocked = overused(ch.id, "hook_style") | {MYTH_HOOK}  # freio do YPP; correção de mito só quando planejada
+        alt_styles = ([k for k in HOOKS if k != cur and k not in recent_styles and k not in blocked][:5]
+                      or [k for k in HOOKS if k != cur and k not in blocked] or [k for k in HOOKS if k != cur])
+        op = plan.get("opening") or {}
+        op_note = (f"\nA abertura deste Short é do tipo \"{OPENING_TYPES[op['type']]['name']}\""
+                   + (f" (na tela: \"{op['onscreen']}\")" if op.get("onscreen") else "")
+                   + (f" (movimento: {op['motion']})" if op.get("motion") else "")
+                   + ": as versões novas precisam combinar com ela." if op.get("type") in OPENING_TYPES else "")
         recent_hooks = [" ".join(_tokens(h.get("hook") or "")[:3]) for h in recent if h.get("hook")]
         examples = examples_block(ch.id, "hook")
         styles_txt = "\n".join(f"  - {k}: {HOOKS[k]}" for k in [cur] + alt_styles if k in HOOKS)
@@ -728,7 +975,7 @@ def improve_hook(ch: Channel, data: dict[str, Any], plan: dict[str, Any], log=la
 
 Vídeo: "{data.get('title', '')}"
 Cena 1 (abertura atual, estilo "{cur}"): "{first}"
-Cena 2 (vem logo depois): "{second}"
+Cena 2 (vem logo depois): "{second}"{op_note}
 
 {HOOK_RULES}
 
@@ -770,6 +1017,13 @@ Responda JSON: {{"hooks": [{{"text": "...", "style": "chave do estilo"}}, ...3],
             if styles[best] in HOOKS and isinstance(data.get("variety"), dict):
                 # o experimento de estilos de gancho registra o estilo que de fato foi ao ar
                 data["variety"] = {**data["variety"], "hook_style": styles[best], "hook_style_planned": cur}
+            var = data.get("variety")
+            if isinstance(var, dict) and isinstance(var.get("opening"), dict):
+                # a abertura escolhida passa a ter a fala nova (as outras opções continuam para troca no editor)
+                new_first = _first_sentence(cands[best])
+                op_new = {**var["opening"], "text": new_first}
+                data["variety"] = {**var, "opening": op_new, "opening_options": [
+                    dict(o, text=new_first) if o.get("type") == op_new.get("type") else o for o in var.get("opening_options") or []]}
         data["hook_lab"] = {"candidates": cands, "scores": scores, "best": best, "styles": styles}
     except Exception as e:  # noqa: BLE001
         log(f"Laboratório de gancho não rodou: {e}")
@@ -819,8 +1073,16 @@ Cena atual (JSON): {json.dumps(scene, ensure_ascii=False)}
 Contexto anterior: {script.scenes[index - 1]['text'] if index > 0 else '(início)'}
 Instrução: {instruction}
 {TTS_RULES}
-Reescreva SOMENTE esta cena mantendo o mesmo formato JSON (text, visual, emphasis, label)."""
-    return llm.complete_json(prompt, temperature=0.7, cache=False)
+Reescreva SOMENTE esta cena mantendo o mesmo formato JSON (text, visual, emphasis, label e, se houver, delivery)."""
+    data = llm.complete_json(prompt, temperature=0.7, cache=False)
+    if isinstance(data, dict):
+        for k in ("delivery", "loop", "opening", "chapter"):  # campos da cena que a reescrita não deve perder
+            if k in scene and k not in data:
+                data[k] = scene[k]
+        if isinstance(data.get("delivery"), dict):
+            data = normalize_delivery([data], script.format or "short")[0] if index == 0 else \
+                normalize_delivery([{"text": ""}, data], script.format or "short")[1]
+    return data
 
 
 def apply_fixes(ch: Channel, script: Script, issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -834,7 +1096,13 @@ CORREÇÕES: {json.dumps(issues, ensure_ascii=False)}
 Responda JSON: {{"scenes": [...]}}"""
     data = llm.complete_json(prompt, temperature=0.2, required=("scenes",))
     scenes = data.get("scenes") if isinstance(data, dict) else None
-    return scenes if scenes and len(scenes) >= len(script.scenes) // 2 else script.scenes
+    if not scenes or len(scenes) < len(script.scenes) // 2:
+        return script.scenes
+    if len(scenes) == len(script.scenes):  # mesma cena a cena: campos que a IA às vezes esquece (prosódia, loop, abertura)
+        keep = ("delivery", "loop", "opening", "chapter")
+        scenes = [{**{k: old[k] for k in keep if k in old}, **new} if isinstance(new, dict) else old
+                  for old, new in zip(script.scenes, scenes)]
+    return scenes
 
 
 def scenes_sig(scenes: list[dict[str, Any]]) -> str:
@@ -864,7 +1132,17 @@ def check_claims(ch: Channel, script: Script, idea: Idea | None) -> dict[str, An
     material = "\n\n".join(f"[{i + 1}] {s['url']}\n{s['text']}" for i, s in enumerate(srcs[:6]))
     confirmed = "\n".join(f"- {f.get('claim')}" for f in (idea.facts if idea else []) if f.get("verdict") == "confirmado")
     scenes = "\n".join(f"{i + 1}. {s.get('text', '')}" for i, s in enumerate(script.scenes))
-    prompt = f"""Você é checador de fatos de um canal sobre {ch.niche}. Confira o roteiro FINAL frase por frase.
+    var = script.variety or {}
+    myth = ""
+    if var.get("hook_style") == "correcao" or var.get("structure") == "mito_verdade":
+        myth = """
+CORREÇÃO DE MITO: este roteiro diz que algo que a escola/o senso comum ensina está errado. Extraia como afirmações
+SEPARADAS (a) que a crença é mesmo comum/ensinada e (b) a correção (o que é verdade). A crença apresentada COMO crença
+("muita gente aprende que...") não é afirmação falsa do roteiro — o que precisa estar nas fontes é a correção (b).
+Se (b) for "sem_fonte" ou "contradiz", reescreva a cena tirando a moldura "te ensinaram errado" e afirmando só o que
+as fontes sustentam; se (a) não tiver base (ninguém acredita nisso), troque "a escola te ensinou" por algo honesto
+("pouca gente sabe que...")."""
+    prompt = f"""Você é checador de fatos de um canal sobre {ch.niche}. Confira o roteiro FINAL frase por frase.{myth}
 TÍTULO: {script.title}
 ROTEIRO (cenas numeradas):
 {scenes}
@@ -933,6 +1211,14 @@ def clean_ending(scenes: list[dict[str, Any]], cta: str = "") -> list[dict[str, 
     if not scenes:
         return scenes
     last = dict(scenes[-1])
+    if last.get("loop"):
+        # Short em loop: a última cena é a frase que emenda na 1ª (o CTA ficou na penúltima) — não corta; só tira
+        # reticências e pontuação final, para a voz não fazer cara de "fim" antes da emenda
+        txt = re.sub(r"(\.\.\.|…)\s*$", "", (last.get("text") or "").strip()).rstrip(" .;,")
+        if len(txt.split()) >= 2:
+            last["text"] = txt
+            return scenes[:-1] + [last]
+        last.pop("loop", None)  # sobrou nada: vira Short normal
     sents = [x for x in re.split(r"(?<=[.!?…])\s+", (last.get("text") or "").strip()) if x]
     cta_key = " ".join(cta.lower().split()[:3])
     # palavra inteira: "persegue"/"consegue" não são CTA

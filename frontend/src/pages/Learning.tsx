@@ -23,7 +23,7 @@ type Report = { computed_at: string; seconds: number; channel_id: number | null;
   idea_score: { spearman: number | null; n: number }; lessons: string[]; dimensions: Dim[]; weights: Record<string, Record<string, number>>
   videos: VideoRow[]; pred_vs_actual: { title: string; channel_id: number; pred: number; actual: number }[]
   curve: { age_h: number; views: number }[]; topics?: { win: [string, number, number][]; lose: [string, number, number][] } | null
-  method: string[] }
+  method: string[]; audience?: Audience | null }
 type Breakout = { pub_id: number; channel_id: number; channel: string; title: string; url: string; thumbnail: string; age_h: number; views: number
   expected_now: number; x_normal: number; z: number; status: string; views_per_h: number | null
   proj_7d: number; proj_7d_low: number; proj_7d_high: number; p_above: number; calibration_n: number }
@@ -418,6 +418,8 @@ export default function Learning() {
         <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-3">{dims.map(d => <DimCard key={d.key} d={d} />)}</div>
       </div>
 
+      <AudienceCard a={r.audience} />
+
       <div className="grid lg:grid-cols-2 gap-4 items-start">
         <Scatter pts={r.pred_vs_actual} />
         {cid ? <CurveCard curve={r.curve} typical={ch?.typical_48h} /> : null}
@@ -431,5 +433,83 @@ export default function Learning() {
         <div className="mt-2 text-faint">Calculado {new Date(r.computed_at).toLocaleString('pt-BR')} em {r.seconds}s</div>
       </details>
     </div>
+  )
+}
+
+// ---------------------------------------------------------------- público (origem, inscritos, aparelho, quem deslizou)
+
+type AudFormat = { format: string; videos: number; engaged_ratio: number | null; with_performance: { key: string; rho: number; n: number }[] } & Record<string, any>
+type AudOpt = { key: string; label: string; n_er: number; n_hook: number; engaged_ratio: number | null; engaged_raw: number | null; hook_3s: number | null; feed_engaged_ratio: number | null }
+export type Audience = { formats: AudFormat[]; by_dimension: { key: string; label: string; options: AudOpt[] }[]
+  channel_engaged_ratio: number | null; channel_hook_3s: number | null; videos_with_signals: number; note: string }
+
+const SHARE_LABEL: Record<string, string> = {
+  share_feed: 'Feed do Shorts', share_search: 'Busca', share_suggested: 'Sugeridos', share_browse: 'Inscritos/navegação',
+  share_external: 'Externo/direto', share_ads: 'Anúncios pagos', share_other: 'Outras',
+  share_subscribed: 'Inscritos (do total)', share_mobile: 'Celular', share_tv: 'TV', share_desktop: 'Computador',
+}
+const TRAFFIC_KEYS = ['share_feed', 'share_search', 'share_suggested', 'share_browse', 'share_external', 'share_ads', 'share_other']
+const pct0 = (v: number | null | undefined) => v == null ? '—' : `${Math.round(v * 100)}%`
+
+export function AudienceCard({ a }: { a?: Audience | null }) {
+  if (!a) return null
+  if (!a.videos_with_signals) return (
+    <section className="card p-4 text-[13px] text-muted">
+      <div className="text-sm font-semibold text-text mb-1">De onde vem o público</div>
+      Ainda sem sinais do YouTube Analytics (origem do tráfego, inscritos, aparelho). Eles chegam com ~2 dias de atraso e são coletados a cada 3 h.
+    </section>
+  )
+  const dims = a.by_dimension.filter(d => d.options.some(o => o.n_er > 0))
+  return (
+    <section className="card">
+      <SectionTitle hint={a.note}>De onde vem o público e onde cada formato ganha</SectionTitle>
+      <div className="p-4 grid lg:grid-cols-2 gap-5">
+        {a.formats.map(f => (
+          <div key={f.format}>
+            <div className="text-[13px] font-semibold mb-2">{f.format === 'long' ? 'Vídeos longos' : 'Shorts'} <span className="text-muted font-normal">· {f.videos} vídeos · engajadas/views {pct0(f.engaged_ratio)}</span></div>
+            <div className="space-y-1.5">
+              {TRAFFIC_KEYS.filter(k => (f[k] ?? 0) >= 0.01).sort((x, y) => (f[y] ?? 0) - (f[x] ?? 0)).map(k => (
+                <div key={k} className="flex items-center gap-2 text-[12.5px]">
+                  <span className="w-36 text-muted truncate">{SHARE_LABEL[k]}</span>
+                  <div className="flex-1 h-1.5 rounded-full bg-line overflow-hidden"><div className="h-full bg-grad rounded-full" style={{ width: `${Math.round((f[k] ?? 0) * 100)}%` }} /></div>
+                  <span className="num w-10 text-right">{pct0(f[k])}</span>
+                </div>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-1.5 mt-2.5 text-[11.5px]">
+              {['share_subscribed', 'share_mobile', 'share_tv', 'share_desktop'].filter(k => f[k] != null).map(k =>
+                <span key={k} className="badge">{SHARE_LABEL[k]} {pct0(f[k])}</span>)}
+            </div>
+            {f.with_performance?.filter(w => Math.abs(w.rho) >= 0.4).slice(0, 2).map(w => (
+              <div key={w.key} className="text-[11.5px] text-muted mt-1.5">
+                {w.rho > 0 ? '↑' : '↓'} Mais {SHARE_LABEL[w.key]?.toLowerCase()} anda junto com vídeos {w.rho > 0 ? 'acima' : 'abaixo'} do normal
+                (correlação {w.rho.toFixed(2).replace('.', ',')}, {w.n} vídeos — indício, não causa)
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+      {!!dims.length && (
+        <div className="px-4 pb-4">
+          <div className="text-[13px] font-semibold mb-1">Quem desliza × quem fica, por escolha de variedade</div>
+          <div className="text-[11.5px] text-muted mb-2">Engajadas ÷ views (orgânicas) e retenção aos 3s, encolhidas para a média do canal ({pct0(a.channel_engaged_ratio)}) quando há poucos vídeos</div>
+          <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {dims.map(d => (
+              <div key={d.key} className="surface-2 p-3">
+                <div className="text-[12.5px] font-medium mb-1.5">{d.label}</div>
+                {d.options.map(o => (
+                  <div key={o.key} className="flex items-center gap-2 text-[12px] leading-6">
+                    <span className="flex-1 truncate">{o.label}</span>
+                    <span className="num text-muted" title="engajadas ÷ views (encolhido)">{pct0(o.engaged_ratio)}</span>
+                    <span className="num text-faint w-14 text-right" title="retenção aos 3s">{o.hook_3s != null ? `${Math.round(o.hook_3s)}% 3s` : ''}</span>
+                    <span className="text-faint w-8 text-right">{o.n_er}v</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
   )
 }

@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { Area, AreaChart, CartesianGrid, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Area, AreaChart, CartesianGrid, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { ArrowUpRight, Globe2 } from 'lucide-react'
 import { useApi } from '../api'
 import { Empty, fmtNum, PageHeader, SectionTitle, seriesColor, Skeleton, useChannel } from '../ui'
@@ -182,8 +182,89 @@ export default function AllChannels({ scope, onOpen }: { scope: ReactNode; onOpe
         )}
       </section>
 
+      {/* cada vídeo recente × o vídeo típico do canal na mesma idade */}
+      <AgeCompareCard picker />
+
       {/* Shorts campeões → vídeos longos (horas assistidas para o YPP) */}
       <ChampionsCard />
     </div>
+  )
+}
+
+// ---------------------------------------------------------------- vídeos recentes × curva mediana do canal (mesma idade)
+
+type AgeCmp = { channel_id: number; help: string; curve: { age_h: number; views: number; p25: number; p75: number }[]
+  videos: { pub_id: number; title: string; url: string; format: string; age_h: number; x_now: number | null; points: [number, number, number][] }[] }
+
+const AGE_TICKS = [1, 6, 24, 48, 168, 336]
+const ageLabel = (h: number) => h < 24 ? `${Math.round(h)}h` : `${Math.round(h / 24)}d`
+const LINE_COLORS = ['#8b6cff', '#22d3ee', '#34d399', '#f472b6', '#fbbf24', '#60a5fa', '#a3e635', '#fb923c']
+const fmtX = (v: number) => `${v.toFixed(v >= 10 ? 0 : 1).replace('.', ',')}x`
+
+/** Cada vídeo recente comparado com o vídeo típico do canal NA MESMA IDADE (curva do aprendizado). */
+export function AgeCompareCard({ channelId, picker }: { channelId?: number; picker?: boolean }) {
+  const { channels } = useChannel()
+  const [pick, setPick] = useState<number | undefined>(undefined)
+  const cid = pick ?? channelId ?? channels[0]?.id
+  const [mode, setMode] = useState<'x' | 'views'>('x')
+  const [hi, setHi] = useState<number | null>(null)
+  const { data } = useApi<AgeCmp>(cid ? `/learning/age-compare?channel_id=${cid}&n=8` : null)
+  const vids = data?.videos.filter(v => v.points.length) ?? []
+  const maxAge = Math.max(48, ...vids.map(v => v.points.at(-1)?.[0] ?? 0))
+  const ticks = AGE_TICKS.filter(t => t <= maxAge * 1.05)
+  return (
+    <section className="card overflow-hidden">
+      <SectionTitle hint={data?.help ?? 'Comparação na mesma idade'} action={<div className="flex items-center gap-2">
+        {picker && <select className="input !w-auto !h-7 text-xs" value={cid ?? ''} onChange={e => setPick(Number(e.target.value))} aria-label="Canal">
+          {channels.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>}
+        <div className="seg">
+          <button data-active={mode === 'x'} onClick={() => setMode('x')}>x o normal</button>
+          <button data-active={mode === 'views'} onClick={() => setMode('views')}>views</button>
+        </div>
+      </div>}>Vídeos recentes × normal do canal na mesma idade</SectionTitle>
+      <div className="p-4">
+        {!data ? <Skeleton className="h-64" /> : !vids.length ? (
+          <div className="h-40 grid place-items-center text-[13px] text-muted">Ainda sem leituras de vídeos recentes neste canal.</div>
+        ) : (
+          <>
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart margin={{ left: -6, right: 10, top: 8 }}>
+                  <CartesianGrid {...chart.grid} />
+                  <XAxis dataKey="a" type="number" scale="log" domain={[1, Math.min(336, maxAge)]} ticks={ticks} allowDataOverflow
+                    tickFormatter={v => ageLabel(Number(v))} {...chart.axis} />
+                  {mode === 'x'
+                    ? <YAxis {...chart.axis} width={44} tickFormatter={v => fmtX(Number(v))} domain={[0, (m: number) => Math.max(2, Math.ceil(m))]} allowDataOverflow />
+                    : <YAxis {...chart.axis} width={52} scale="log" domain={[1, 'auto']} allowDataOverflow tickFormatter={v => fmtNum(Number(v))} />}
+                  <Tooltip cursor={chart.cursor} content={<ChartTip fmtLabel={v => `${ageLabel(Number(v))} no ar`}
+                    rows={p => p.map(x => ({ name: String(x.name), value: mode === 'x' ? fmtX(Number(x.value)) : fmtNum(Number(x.value)), color: x.stroke }))} />} />
+                  {mode === 'x' ? <ReferenceLine y={1} stroke="var(--faint)" strokeDasharray="4 4" label={{ value: 'normal', position: 'insideTopLeft', fill: 'var(--faint)', fontSize: 10.5 }} />
+                    : <>
+                      <Line data={data.curve.map(c => ({ a: c.age_h, y: Math.max(1, c.p75) }))} dataKey="y" name="faixa alta (p75)" stroke="var(--line-3)" strokeDasharray="3 4" dot={false} isAnimationActive={false} />
+                      <Line data={data.curve.map(c => ({ a: c.age_h, y: Math.max(1, c.views) }))} dataKey="y" name="típico do canal" stroke="var(--muted)" strokeWidth={2} dot={false} isAnimationActive={false} />
+                      <Line data={data.curve.map(c => ({ a: c.age_h, y: Math.max(1, c.p25) }))} dataKey="y" name="faixa baixa (p25)" stroke="var(--line-3)" strokeDasharray="3 4" dot={false} isAnimationActive={false} />
+                    </>}
+                  {vids.map((v, i) => (
+                    <Line key={v.pub_id} data={v.points.map(([a, views, x]) => ({ a, y: mode === 'x' ? x : Math.max(1, views) }))} dataKey="y"
+                      name={v.title.slice(0, 40)} stroke={LINE_COLORS[i % LINE_COLORS.length]} strokeWidth={hi === v.pub_id ? 3 : 1.75}
+                      strokeOpacity={hi == null || hi === v.pub_id ? 1 : 0.25} dot={false} isAnimationActive={false} />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1.5 mt-3 text-[12px]">
+              {vids.map((v, i) => (
+                <button key={v.pub_id} className="inline-flex items-center gap-1.5 text-muted hover:text-text max-w-72" onMouseEnter={() => setHi(v.pub_id)} onMouseLeave={() => setHi(null)}
+                  onClick={() => v.url && window.open(v.url, '_blank')}>
+                  <span className="w-2.5 h-2.5 rounded-[3px] shrink-0" style={{ background: LINE_COLORS[i % LINE_COLORS.length] }} />
+                  <span className="truncate">{v.title}</span>
+                  {v.x_now != null && <span className={`num shrink-0 ${v.x_now >= 1.3 ? 'text-ok' : v.x_now < 0.7 ? 'text-bad' : 'text-text'}`}>{fmtX(v.x_now)}</span>}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </section>
   )
 }

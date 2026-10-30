@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import { Clapperboard, Download, Trash2, Send, Loader2, ShieldCheck, ShieldAlert, RotateCcw, Check, Play, ExternalLink, List, LayoutGrid, FileText, Search, Images, ListOrdered, Scissors } from 'lucide-react'
+import { Clapperboard, Download, Trash2, Send, Loader2, ShieldCheck, ShieldAlert, RotateCcw, Check, Play, ExternalLink, List, LayoutGrid, FileText, Search, Images, ListOrdered, Scissors, ListChecks } from 'lucide-react'
 import clsx from 'clsx'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, invalidate, mediaUrl, useApi, type Video } from '../api'
 import { act, ago, Empty, fmtDur, Menu, Modal, PageHeader, Status, Tabs, useChannel } from '../ui'
 import PublishModal from './PublishModal'
 import { RowsSkeleton, useProgressive } from './kit'
+import StudioChecklist, { ChecklistChip, type ChecklistSummary } from '../components/StudioChecklist'
 
 type Filter = 'all' | 'ready' | 'review' | 'published' | 'failed'
 const playable = (v: Video) => ['ready', 'published', 'review'].includes(v.status)
@@ -19,6 +20,13 @@ export default function Videos() {
   const [qa, setQa] = useState<Video | null>(null)
   const [play, setPlay] = useState<Video | null>(null)
   const [ab, setAb] = useState<Video | null>(null)
+  // checklist do YouTube Studio: abre pelo menu ou pela notificação (/videos?checklist=<id da publicação>)
+  const [params, setParams] = useSearchParams()
+  const [check, setCheck] = useState<{ pubId?: number; videoId?: number } | null>(null)
+  const fromUrl = Number(params.get('checklist')) || null
+  const closeCheck = () => { setCheck(null); if (fromUrl) { params.delete('checklist'); setParams(params, { replace: true }) } }
+  const { data: checks } = useApi<ChecklistSummary>(channel ? `/publish2/checklist?channel_id=${channel.id}` : null)
+  const checkOf = (v: Video) => Object.values(checks ?? {}).find(c => c.video_id === v.id)
   const [filter, setFilter] = useState<Filter>('all')
   const [q, setQ] = useState('')
   const [view, setView] = useState<'list' | 'grid'>(() => { try { return (localStorage.getItem('videos.view') as any) || 'list' } catch { return 'list' } })
@@ -34,6 +42,7 @@ export default function Videos() {
     { label: 'Abrir roteiro', icon: <FileText size={15} />, onClick: () => nav(`/roteiros/${v.script_id}`), disabled: !v.script_id },
     ...(v.path ? [{ label: 'Baixar MP4', icon: <Download size={15} />, href: mediaUrl(v.path) }] : []),
     ...(v.publications?.[0]?.url ? [{ label: 'Abrir no YouTube', icon: <ExternalLink size={15} />, href: v.publications[0].url }] : []),
+    ...(v.status === 'published' ? [{ label: 'Checklist do Studio', icon: <ListChecks size={15} />, onClick: () => setCheck({ videoId: v.id }) }] : []),
     { label: 'Reinspecionar', icon: <RotateCcw size={15} />, onClick: () => act(() => api(`/videos/${v.id}/inspect`, { body: {} }), 'Inspeção iniciada'), disabled: !v.path },
     ...(v.format === 'long' && v.path ? [
       'sep' as const,
@@ -104,7 +113,7 @@ export default function Videos() {
                     <td className="right num text-muted">{v.duration ? fmtDur(v.duration) : '—'}</td>
                     <td className="text-muted whitespace-nowrap">{ago(v.created_at)}</td>
                     <td className="right">
-                      <div className="flex items-center justify-end gap-1">{primary(v)}<Menu items={menu(v)} /></div>
+                      <div className="flex items-center justify-end gap-1"><ChecklistChip s={checkOf(v)} onClick={() => setCheck({ videoId: v.id })} />{primary(v)}<Menu items={menu(v)} /></div>
                     </td>
                   </tr>
                 ))}
@@ -149,6 +158,7 @@ export default function Videos() {
       )}
 
       {pub && <PublishModal video={pub} onClose={() => setPub(null)} />}
+      {(check || fromUrl) && <StudioChecklist pubId={check ? check.pubId : fromUrl} videoId={check?.videoId} onClose={closeCheck} />}
       {ab && <AbModal v={data.find(x => x.id === ab.id) ?? ab} onClose={() => setAb(null)} />}
       {qa && <QaModal v={data.find(x => x.id === qa.id) ?? qa} onClose={() => setQa(null)} />}
       {play && (

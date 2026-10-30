@@ -2,7 +2,7 @@
 import { lazy, type ComponentType } from 'react'
 import {
   LayoutDashboard, Globe2, Bell, Lightbulb, FileText, Clapperboard, Image as ImageIcon, FlaskConical, Send, Activity,
-  MessageSquare, BarChart3, GraduationCap, Radar, Bot, CalendarRange, Trophy, Crosshair, Tv, Plus, Settings as Cog, SlidersHorizontal,
+  MessageSquare, BarChart3, GraduationCap, Radar, Bot, CalendarRange, CalendarDays, Trophy, Crosshair, Tv, Plus, Settings as Cog, SlidersHorizontal,
   type LucideIcon,
 } from 'lucide-react'
 import { prefetch } from '../api'
@@ -29,6 +29,7 @@ export const LOADERS = {
   trends: () => import('../pages/Trends'),
   autopilot: () => import('../pages/Autopilot'),
   campaigns: () => named(import('./Sections'), 'CampaignsPage'),
+  calendar: () => import('../pages/Calendar'),
   champions: () => named(import('./Sections'), 'ChampionsPage'),
   focus: () => named(import('./Sections'), 'FocusPage'),
   channels: () => import('../pages/Channels'),
@@ -58,6 +59,7 @@ export const ROUTES: { path: string; page: PageKey }[] = [
   { path: '/tendencias', page: 'trends' },
   { path: '/piloto-automatico', page: 'autopilot' },
   { path: '/campanhas', page: 'campaigns' },
+  { path: '/calendario', page: 'calendar' },
   { path: '/campeoes', page: 'champions' },
   { path: '/modo-foco', page: 'focus' },
   { path: '/canais', page: 'channels' },
@@ -99,6 +101,7 @@ export const NAV: NavGroup[] = [
     { to: '/tendencias', label: 'Radar de tendências', desc: 'Assuntos subindo agora no nicho', icon: Radar, page: 'trends', keywords: 'trends radar' },
     { to: '/piloto-automatico', label: 'Piloto automático', desc: 'Produção e postagem sem você', icon: Bot, page: 'autopilot', keywords: 'autopilot automatico' },
     { to: '/campanhas', label: 'Campanhas', desc: 'Datas sazonais que puxam audiência', icon: CalendarRange, page: 'campaigns' },
+    { to: '/calendario', label: 'Calendário de efemérides', desc: 'Datas que vêm por aí, prontas para virar pauta', icon: CalendarDays, page: 'calendar', keywords: 'almanaque efemerides datas aniversario eclipse' },
     { to: '/campeoes', label: 'Campeões', desc: 'Short campeão → vídeo longo', icon: Trophy, page: 'champions' },
     { to: '/modo-foco', label: 'Modo foco', desc: 'Quanto cada canal produz', icon: Crosshair, page: 'focus', data: () => ['/focus'] },
   ] },

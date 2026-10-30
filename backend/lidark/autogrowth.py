@@ -380,6 +380,7 @@ def retitle_published(video_id: int | None, title: str, reason: str = "", public
         body = {"id": pub.external_id, "snippet": {"title": new, "categoryId": sn.get("categoryId", "27"),
                                                    "description": sn.get("description", ""), "tags": sn.get("tags", []),
                                                    "defaultLanguage": sn.get("defaultLanguage", "pt-BR")}}
+        __import__("lidark.quota", fromlist=["x"]).spend(50, "videos.update")  # medidor de cota diária
         yt.videos().update(part="snippet", body=body).execute()
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e)[:300]}

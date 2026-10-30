@@ -424,3 +424,6 @@ def job_prepare(ctx: JobContext) -> dict:
                 payload={"auto_render": True, "format": "long", "publish_at": when.isoformat()})
         ctx.log(f"Longo vai para roteiro → vídeo → publicação em {when.astimezone(posting_times.TZ):%d/%m %H:%M}")
     return {"fact_status": idea.fact_status, "score": idea.score}
+
+
+from . import enem_bank  # noqa: E402,F401  (registra a tarefa "enem_bank_ideas": banco de questões no estilo ENEM)

@@ -36,18 +36,45 @@ def search_terms(topic: str, extra: list[str] | None = None, limit: int = 12) ->
     return out[:limit]
 
 
+def question_terms(topic: str, enem: bool = False) -> list[str]:
+    """Buscas em forma de pergunta (como o público digita): 'o que foi X', 'X resumo', 'X enem'."""
+    from .radar import youtube_suggestions
+    base = re.sub(r"[^\wÀ-ú ]", " ", topic).strip()
+    words = [w for w in base.split() if len(w) > 2]
+    core = " ".join(words[:4]).lower()
+    if not core:
+        return []
+    seeds = [f"o que foi {core}", f"por que {core}", f"{core} resumo"] + ([f"{core} enem"] if enem else [])
+    out: list[str] = []
+    for q in seeds:
+        try:
+            for s in youtube_suggestions(q)[:3]:
+                if s not in out:
+                    out.append(s)
+        except Exception:  # noqa: BLE001
+            continue
+    return out[:8]
+
+
 def seo_block(ch: Channel, topic: str, extra: list[str] | None = None) -> str:
+    from .content import is_enem_channel
+    enem = is_enem_channel(ch)
     terms = search_terms(topic, extra)
-    if not terms:
-        return ""
-    return f"""SEO DE BUSCA (vídeo longo vive de busca e de "vídeos sugeridos"). Termos que o público REALMENTE pesquisa
-(autocompletar do YouTube Brasil):
-{chr(10).join('- ' + t for t in terms)}
-- TÍTULO: o termo de busca mais forte e relevante nas primeiras palavras + uma lacuna de curiosidade honesta
-  (ex.: "<termo>: o detalhe que ninguém te contou" — com palavras próprias). Máximo 60 caracteres.
-- DESCRIÇÃO: a 1ª frase usa o termo principal de forma natural e diz o que a pessoa vai entender; depois 2-3 variações
-  dos termos acima ao longo do texto (frases de verdade, nunca lista de palavras).
-- Os títulos de CAPÍTULO também devem usar termos que alguém buscaria.
+    questions = [q for q in question_terms(topic, enem) if q not in terms]
+    found = ""
+    if terms or questions:
+        found = ("Termos que o público REALMENTE pesquisa (autocompletar do YouTube Brasil):\n"
+                 + "\n".join("- " + t for t in terms + questions) + "\n")
+    ex = "O que foi a Revolta da Vacina? Resumo para o ENEM" if enem else "O que foi o Paradoxo de Fermi? Resumo"
+    return f"""SEO DE BUSCA (vídeo longo vive de busca e de "vídeos sugeridos").
+{found}- TÍTULO: o termo de busca mais forte nas primeiras palavras. Muita gente busca em PERGUNTA ("o que foi X", "por que X
+  aconteceu", "X resumo"{', "X enem"' if enem else ''}) — quando o padrão de título sorteado permitir, use essa forma
+  (ex.: "{ex}"); senão, termo + lacuna de curiosidade honesta. Máximo 60 caracteres.
+- DESCRIÇÃO (200 a 350 palavras): a 1ª frase responde à busca principal com o termo de forma natural ("X foi...");
+  depois 2-3 parágrafos curtos com o que o vídeo explica, usando as variações dos termos acima em frases de verdade
+  (nunca lista de palavras-chave).
+- CAPÍTULOS COM PALAVRA-CHAVE: cada título de capítulo tem um termo que alguém pesquisaria (nome, evento, conceito:
+  "Causas da Revolta da Vacina", não "O começo").
 - TAGS: os termos acima que tiverem relação real com o vídeo."""
 
 
@@ -116,6 +143,7 @@ def add_chapters_to_published(video_id: int, ctx: JobContext | None = None) -> l
     body = {"id": pub.external_id, "snippet": {"title": sn["title"], "categoryId": sn.get("categoryId", "27"),
                                                 "description": new_desc[:4900], "tags": sn.get("tags", []),
                                                 "defaultLanguage": sn.get("defaultLanguage", "pt-BR")}}
+    __import__("lidark.quota", fromlist=["x"]).spend(50, "videos.update")  # medidor de cota diária
     yt.videos().update(part="snippet", body=body).execute()
     if ctx:
         ctx.log("Descrição do vídeo atualizada no YouTube com os capítulos")
@@ -279,6 +307,8 @@ Responda JSON: {{"shorts": [{{"title": "título do Short (35-50 caracteres)", "h
         if len(scenes) < 5:
             continue
         plan = variety.plan(ch, "short")
+        # este Short termina convidando para o longo: sem loop; a abertura medida é a frase de impacto que ele tem
+        plan.update({"loop": False, "opening_type": "impact"})
         plan.update({"from_long": pub.url if pub else "", "from_long_video": video_id,
                      "series": (sc.variety or {}).get("series") or plan.get("series")})
         with session() as s:
@@ -691,6 +721,7 @@ def _update_desc(yt, video_ext: str, fn) -> bool:
     body = {"id": video_ext, "snippet": {"title": sn["title"], "categoryId": sn.get("categoryId", "27"),
                                          "description": new[:4900], "tags": sn.get("tags", []),
                                          "defaultLanguage": sn.get("defaultLanguage", "pt-BR")}}
+    __import__("lidark.quota", fromlist=["x"]).spend(50, "videos.update")  # medidor de cota diária
     yt.videos().update(part="snippet", body=body).execute()
     return True
 

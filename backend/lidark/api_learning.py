@@ -70,3 +70,104 @@ def learning_refresh(channel_id: Optional[int] = None, wait: bool = False) -> di
 
     threading.Thread(target=run, daemon=True, name="learning-refresh").start()
     return {"ok": True, "running": True}
+
+
+# ---------------------------------------------------------------- sinais de público, engajadas, cortes, diagnóstico
+
+def _cached(key: str, fn, ttl: float = 600):
+    from . import cache
+    return cache.get(f"learning:{key}", fn, ttl=ttl, stale=6 * 3600)
+
+
+@router.get("/audience")
+def learning_audience(channel_id: Optional[int] = None) -> dict[str, Any]:
+    """Origem do público (feed, busca, sugeridos...), inscritos e aparelho por formato; engajadas/views e retenção aos
+    3s por opção de variedade (tipo de abertura, loop, gancho...)."""
+    return learning.audience_signals(learning._get_state(), channel_id)
+
+
+@router.get("/engaged")
+def learning_engaged(channel_id: Optional[int] = None) -> dict[str, Any]:
+    return learning.engaged_panel(channel_id)
+
+
+@router.get("/cuts")
+def learning_cuts(channel_id: int) -> dict[str, Any]:
+    """Mapa de quedas por segundo × cortes de cena (Shorts com curva de retenção) + regra derivada."""
+    from . import retention
+
+    def run() -> dict[str, Any]:
+        rows = retention.channel_retention(channel_id)
+        return {**retention.cut_drops(rows, channel_id), "rule": retention.cut_rule(channel_id, rows)}
+    return _cached(f"cuts:{channel_id}", run)
+
+
+@router.get("/diagnose")
+def learning_diagnose(channel_id: Optional[int] = None, min_age_h: float = 48, max_age_h: float = 720,
+                      limit: int = 30) -> list[dict[str, Any]]:
+    """“Por que flopou”: causa provável (gancho, meio, tema, miniatura) e ação sugerida, vídeo a vídeo."""
+    from . import diagnose
+    return _cached(f"diag:{channel_id}:{min_age_h}:{max_age_h}:{limit}",
+                   lambda: diagnose.diagnose(channel_id, min_age_h, max_age_h, limit), ttl=300)
+
+
+@router.get("/age-compare")
+def learning_age_compare(channel_id: int, n: int = 8) -> dict[str, Any]:
+    """Vídeos recentes × curva mediana do canal na mesma idade (gráfico)."""
+    return learning.age_compare(channel_id, max(1, min(n, 20)))
+
+
+@router.post("/signals/refresh")
+def learning_signals_refresh() -> dict[str, Any]:
+    """Busca agora os sinais de público que estão vencidos (o refresh do aprendizado já faz isso a cada coleta)."""
+    from . import retention
+    return retention.collect_signals()
+
+
+# ---------------------------------------------------------------- radar de outliers e almanaque
+
+class OutlierIdeaIn(BaseModel):
+    channel_id: int
+    video_id: str
+
+
+@router.get("/outliers")
+def learning_outliers(channel_id: int, refresh: bool = False) -> dict[str, Any]:
+    """Outliers do nicho (PT e EN, views ÷ média do canal ≥ 5x) e temas em inglês ainda sem cobertura em português.
+    Atualiza sozinho 1x por dia (2 buscas = 200 unidades da cota por canal)."""
+    from . import radar
+    return radar.outliers(channel_id, refresh)
+
+
+@router.post("/outliers/idea")
+def learning_outlier_idea(body: OutlierIdeaIn) -> dict[str, Any]:
+    from fastapi import HTTPException
+
+    from . import radar
+    try:
+        return radar.outlier_idea(body.channel_id, body.video_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+class AlmanacIdeaIn(BaseModel):
+    channel_id: int
+    event_id: str
+
+
+@router.get("/almanac")
+def learning_almanac(channel_id: int, days: int = 60, min_ahead: int = 7) -> dict[str, Any]:
+    """Efemérides dos próximos dias por nicho (só fontes verificáveis ou cálculo; confiança marcada)."""
+    from . import almanac
+    return almanac.calendar(channel_id, max(14, min(days, 120)), max(0, min(min_ahead, 30)))
+
+
+@router.post("/almanac/idea")
+def learning_almanac_idea(body: AlmanacIdeaIn) -> dict[str, Any]:
+    from fastapi import HTTPException
+
+    from . import almanac
+    try:
+        return almanac.create_idea(body.channel_id, body.event_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e

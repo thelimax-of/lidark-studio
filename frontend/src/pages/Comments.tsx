@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { MessageSquare, RefreshCw, Send, X, ThumbsUp, Link2, Pin, MessageCircle, ExternalLink } from 'lucide-react'
-import { api, invalidate, useApi } from '../api'
+import { MessageSquare, RefreshCw, Send, X, ThumbsUp, Link2, Pin, MessageCircle, ExternalLink, Lightbulb } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { api, invalidate, useApi, type Idea } from '../api'
 import { act, ago, ChannelScope, ChannelTag, Empty, PageHeader, Tabs, useChannel, useScope } from '../ui'
 import { Callout, RowsSkeleton, useProgressive } from './kit'
 import { connectYoutube } from './Channels'
@@ -22,6 +23,10 @@ export default function Comments() {
   const refresh = () => (all || channel) && act(() => api(all ? '/comments/refresh' : `/channels/${channel!.id}/comments/refresh`, { body: {} }), 'Buscando comentários novos…')
     .then(() => setTimeout(() => invalidate('/comments'), all ? 12000 : 6000))
   const items = data?.items ?? []
+  // perguntas do público que viraram pauta ("respondendo @fulano"): a pauta guarda o id do comentário na tag comentario:<id>
+  const { data: ideas } = useApi<Idea[]>(tab === 'seed' ? null : all ? '/ideas?slim=1&limit=300' : channel ? `/ideas?slim=1&limit=300&channel_id=${channel.id}` : null)
+  const asIdea: Record<string, Idea> = {}
+  for (const i of ideas ?? []) if (i.origin === 'comment') for (const t of i.tags ?? []) if (t.startsWith('comentario:')) asIdea[t.slice(11)] = i
   const [shown, more] = useProgressive(items, 30, tab + String(all))
   // canais sem a permissão de responder (no modo "todos", um aviso por canal)
   const noWrite = all ? channels.filter(c => data?.can_write_by?.[c.id] === false) : data && !data.can_write && channel ? [channel] : []
@@ -52,12 +57,12 @@ export default function Comments() {
       {isLoading && !data && <div className="card"><RowsSkeleton rows={4} h="h-20" /></div>}
       {!isLoading && !items.length && <Empty icon={<MessageSquare size={20} />} title={tab === 'new' ? 'Nenhum comentário esperando resposta' : tab === 'seed' ? 'O canal ainda não comentou nenhum vídeo' : 'Nada aqui'}
         text={tab === 'seed' ? 'Liga/desliga em Canais → Comentário do canal. Sai alguns minutos depois de o vídeo ir ao ar.' : 'O sistema busca comentários novos a cada 2 horas.'} />}
-      <div className="space-y-3">{shown.map(c => c.status === 'seed' ? <Seed key={c.id} c={c} showChannel={all} /> : <Item key={c.id} c={c} showChannel={all} canWrite={!!(data?.can_write_by?.[c.channel_id] ?? data?.can_write)} />)}{more}</div>
+      <div className="space-y-3">{shown.map(c => c.status === 'seed' ? <Seed key={c.id} c={c} showChannel={all} /> : <Item key={c.id} c={c} idea={asIdea[c.yt_id]} showChannel={all} canWrite={!!(data?.can_write_by?.[c.channel_id] ?? data?.can_write)} />)}{more}</div>
     </>
   )
 }
 
-function Item({ c, canWrite, showChannel }: { c: C; canWrite: boolean; showChannel?: boolean }) {
+function Item({ c, canWrite, showChannel, idea }: { c: C; canWrite: boolean; showChannel?: boolean; idea?: Idea }) {
   const [text, setText] = useState(c.suggestion || '')
   useEffect(() => setText(c.suggestion || ''), [c.suggestion])
   const done = () => invalidate('/comments')
@@ -72,6 +77,7 @@ function Item({ c, canWrite, showChannel }: { c: C; canWrite: boolean; showChann
             <span className="text-faint">{ago(c.published_at)}</span>
             {c.kind && <span className={`badge ${c.kind === 'pergunta' ? 'badge-accent' : c.kind === 'correcao' || c.kind === 'critica' ? 'badge-warn' : c.kind === 'elogio' ? 'badge-ok' : 'text-muted'}`}>{KIND[c.kind] ?? c.kind}</span>}
             {c.likes > 0 && <span className="text-faint flex items-center gap-1"><ThumbsUp size={11} />{c.likes}</span>}
+            {idea && <Link to="/pautas" className="badge badge-ok" data-tip={`Pauta: ${idea.title}`}><Lightbulb size={11} />virou pauta</Link>}
             <a href={`https://www.youtube.com/watch?v=${c.video_id}&lc=${c.yt_id}`} target="_blank" rel="noreferrer" className="text-faint hover:text-accent2 transition-colors truncate max-w-[45%] ml-auto">
               {c.video_title || 'ver no YouTube'}</a>
           </div>

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Send, ShieldAlert } from 'lucide-react'
+import { CalendarClock, Send, ShieldAlert } from 'lucide-react'
 import { api, invalidate, mediaUrl, useApi, type Video } from '../api'
 import { act, Field, Modal } from '../ui'
 
@@ -10,6 +10,11 @@ export default function PublishModal({ video, onClose }: { video: Video; onClose
   const [privacy, setPrivacy] = useState('public')
   const [force, setForce] = useState(false)
   const qaFail = video.assets?.qa && !video.assets.qa.passed
+  // horário escolhido à mão: avisa se bate com outro post do canal ou de um canal irmão (< 2 h) e sugere o próximo livre
+  const iso = when && !isNaN(new Date(when).getTime()) ? new Date(when).toISOString() : ''
+  const { data: slot } = useApi<{ conflict: string | null; suggestion: string | null }>(
+    iso ? `/publish2/slot-check?channel_id=${video.channel_id}&when=${encodeURIComponent(iso)}&format=${video.format || 'short'}` : null)
+  const toLocalInput = (s: string) => { const d = new Date(s); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16) }
   const submit = () => act(() => api('/publications', {
     body: { video_id: video.id, account_ids: sel, scheduled_at: when ? new Date(when).toISOString() : null, privacy, force },
   }), when ? 'Publicação agendada' : 'Publicando…').then(r => { if (r) { invalidate('/publications'); invalidate('/videos'); onClose() } })
@@ -43,6 +48,15 @@ export default function PublishModal({ video, onClose }: { video: Video; onClose
             </select>
           </Field>
         </div>
+        {!when && <p className="text-[12px] text-muted -mt-2">Sem dados próprios do canal, os melhores horários no Brasil são Shorts às 12 h e 19 h e vídeos longos entre 18 h e 21 h.</p>}
+        {when && slot?.conflict && (
+          <div className="flex gap-2.5 items-start text-[13px] p-3 rounded-[var(--r-md)] border border-warn/30 bg-warn/[0.06]">
+            <CalendarClock size={15} className="text-warn shrink-0 mt-0.5" />
+            <span className="flex-1">Horário apertado: {slot.conflict}.</span>
+            {slot.suggestion && <button className="btn btn-sm" onClick={() => setWhen(toLocalInput(slot.suggestion!))}>
+              Usar {new Date(slot.suggestion).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</button>}
+          </div>
+        )}
         {qaFail && (
           <label className="flex gap-2.5 items-start text-sm p-3 rounded-[var(--r-md)] border border-warn/30 bg-warn/[0.06] cursor-pointer">
             <ShieldAlert size={15} className="text-warn shrink-0 mt-0.5" />

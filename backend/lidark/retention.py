@@ -304,6 +304,17 @@ def retention_rules(channel_id: int, rows: list[dict[str, Any]] | None = None) -
         cands.append({"cat": "plan", "score": (b - a) / max(b, 1), "a": round(a, 1), "b": round(b, 1),
                       "n": len(ok[worst]), "key": f"{field}:{worst}", "text": text})
 
+    # 5) quedas concentradas nos cortes de cena (curva × tempos de corte)
+    try:
+        cd = cut_drops(rows)
+        cr = cut_rule(channel_id, rows)
+        if cr:
+            ratio = (cd.get("first_cut_drop") or cd.get("other_cut_drop") or 0) / max(cd.get("base_drop") or 0.05, 0.05)
+            cands.append({"cat": "cut", "score": ratio - 1, "n": cd.get("videos", 0), "key": "first_cut"
+                          if cd.get("first_cut_cluster") else "cuts", "text": cr})
+    except Exception as e:  # noqa: BLE001
+        log.info("quedas nos cortes %s: %s", channel_id, e)
+
     # no máximo uma regra por categoria, as mais fortes primeiro; "o que segura" só se sobrar espaço
     picked, seen = [], set()
     for c in sorted(cands, key=lambda c: (c["cat"] == "visual_best", -c["score"])):
@@ -324,3 +335,262 @@ def retention_rules_prompt(channel_id: int) -> str:
         return ""
     return ("REGRAS DE RETENÇÃO MEDIDAS NOS DADOS DO CANAL (calculadas das quedas reais por cena — obrigatórias, "
             "sem contrariar o plano de variedade):\n" + "\n".join(f"- {r}" for r in rules))
+
+
+# ================================================================ SINAIS POR VÍDEO (YouTube Analytics, em cache)
+# De onde veio o público (feed do Shorts, busca, sugeridos, navegação...), inscritos × não inscritos e aparelho
+# (celular × TV × computador). Poucas consultas: 3 por vídeo, só vídeos de 1-60 dias, no máximo 1x a cada ~20 h
+# (1x por semana depois de 14 dias; congelado depois de 60). A cota do Analytics é separada da API de dados (10 mil).
+
+SIGNALS_PATH = None  # definido na 1ª chamada (CACHE_DIR/learning_signals.json)
+SIG_MAX_PER_CHANNEL = 25
+TRAFFIC_LABELS = {"SHORTS": "Feed do Shorts", "YT_SEARCH": "Busca do YouTube", "RELATED_VIDEO": "Vídeos sugeridos",
+                  "SUBSCRIBER": "Inscrições/feed de inscritos", "YT_CHANNEL": "Página do canal", "YT_OTHER_PAGE": "Outras páginas",
+                  "NO_LINK_OTHER": "Direto/desconhecido", "EXT_URL": "Sites externos", "PLAYLIST": "Playlists",
+                  "NOTIFICATION": "Notificações", "END_SCREEN": "Tela final", "HASHTAGS": "Hashtags",
+                  "SOUND_PAGE": "Página do som", "ADVERTISING": "Anúncios", "YT_PLAYLIST_PAGE": "Página de playlist",
+                  "ANNOTATION": "Cards", "CAMPAIGN_CARD": "Cards de campanha", "SHORTS_CONTENT_LINKS": "Links em Shorts",
+                  "VIDEO_REMIXES": "Remixes", "LIVE_REDIRECT": "Redirecionamento de live"}
+TRAFFIC_GROUP = {"SHORTS": "feed", "YT_SEARCH": "search", "RELATED_VIDEO": "suggested", "SUBSCRIBER": "browse",
+                 "YT_CHANNEL": "browse", "NOTIFICATION": "browse", "YT_OTHER_PAGE": "browse", "PLAYLIST": "browse",
+                 "YT_PLAYLIST_PAGE": "browse", "END_SCREEN": "suggested", "HASHTAGS": "search", "EXT_URL": "external",
+                 "NO_LINK_OTHER": "external", "ADVERTISING": "ads"}
+GROUP_LABELS = {"ads": "anúncios pagos", "feed": "feed do Shorts", "search": "busca", "suggested": "sugeridos", "browse": "inscritos/navegação",
+                "external": "externo/direto", "other": "outras"}
+
+
+def _sig_path():
+    from .config import CACHE_DIR
+    return CACHE_DIR / "learning_signals.json"
+
+
+def load_signals() -> dict[str, Any]:
+    import json
+    try:
+        return json.loads(_sig_path().read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _q(ya, vid: str, start: str, metrics: str, dims: str = "") -> list[list]:
+    import datetime as _d
+    kw = dict(ids="channel==MINE", startDate=start, endDate=_d.date.today().isoformat(), metrics=metrics,
+              filters=f"video=={vid}")
+    if dims:
+        kw["dimensions"] = dims
+    return ya.reports().query(**kw).execute().get("rows") or []
+
+
+def fetch_signals(ya, vid: str, start: str) -> dict[str, Any]:
+    """3 consultas: origem de tráfego (views e engajadas), inscritos × não inscritos, aparelho."""
+    out: dict[str, Any] = {}
+    try:
+        traffic = {}
+        for src, v, e, m in _q(ya, vid, start, "views,engagedViews,estimatedMinutesWatched", "insightTrafficSourceType"):
+            traffic[str(src)] = {"views": int(v or 0), "engaged": int(e or 0), "minutes": float(m or 0)}
+        out["traffic"] = traffic
+        out["totals"] = {"views": sum(x["views"] for x in traffic.values()),
+                         "engaged": sum(x["engaged"] for x in traffic.values())}
+    except Exception as e:  # noqa: BLE001
+        out["traffic_error"] = str(e)[:160]
+    try:
+        out["subscribed"] = {str(k): {"views": int(v or 0), "engaged": int(e or 0), "avg_pct": float(p or 0)}
+                             for k, v, e, p in _q(ya, vid, start, "views,engagedViews,averageViewPercentage", "subscribedStatus")}
+    except Exception as e:  # noqa: BLE001
+        out["subscribed_error"] = str(e)[:160]
+    try:
+        out["device"] = {str(k): int(v or 0) for k, v in _q(ya, vid, start, "views", "deviceType")}
+    except Exception as e:  # noqa: BLE001
+        out["device_error"] = str(e)[:160]
+    return out
+
+
+def collect_signals(max_per_channel: int = SIG_MAX_PER_CHANNEL, budget_s: float = 240) -> dict[str, int]:
+    """Atualiza o cache de sinais dos vídeos que precisam (pouco chamado: seguro rodar a cada coleta de 3 h)."""
+    import json
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import datetime, timedelta, timezone
+
+    from .publish import _yt_client, _yt_creds
+    t0 = time.time()
+    cache = load_signals()
+    now_ = datetime.now(timezone.utc)
+    done = {"videos": 0, "calls": 0, "errors": 0}
+    with session() as s:
+        accs = [a for a in s.exec(select(Account).where(Account.platform == "youtube")).all() if a.credentials]
+        pubs = s.exec(select(Publication).where(Publication.platform == "youtube", Publication.status == "published")).all()
+    for acc in accs:
+        if time.time() - t0 > budget_s:
+            break
+        due = []
+        for p in pubs:
+            if p.channel_id != acc.channel_id or not p.external_id or not p.published_at:
+                continue
+            born = p.published_at if p.published_at.tzinfo else p.published_at.replace(tzinfo=timezone.utc)
+            age_d = (now_ - born).total_seconds() / 86400
+            if age_d < 1 or age_d > 60:
+                continue
+            c = cache.get(p.external_id) or {}
+            last = c.get("at", 0)
+            gap_h = (time.time() - last) / 3600
+            if c and c.get("final"):
+                continue
+            if not c or (age_d <= 14 and gap_h >= 20) or (age_d > 14 and gap_h >= 24 * 7):
+                due.append((age_d, p, (born - timedelta(days=1)).date().isoformat()))
+        due.sort(key=lambda x: x[0])  # os mais novos primeiro (é onde a decisão importa)
+        due = due[:max_per_channel]
+        if not due:
+            continue
+        try:
+            creds = _yt_creds(acc)
+        except Exception as e:  # noqa: BLE001
+            log.info("sinais %s: %s", acc.channel_id, e)
+            continue
+
+        def one(item):
+            age_d, p, start = item
+            try:
+                return p, age_d, fetch_signals(_yt_client(creds, "youtubeAnalytics", "v2"), p.external_id, start)
+            except Exception as e:  # noqa: BLE001
+                return p, age_d, {"error": str(e)[:160]}
+
+        with ThreadPoolExecutor(4) as ex:
+            for p, age_d, sig in ex.map(one, due):
+                done["calls"] += 3
+                if sig.get("error") or sig.get("traffic_error"):
+                    done["errors"] += 1
+                cache[p.external_id] = {**sig, "at": time.time(), "age_h": round(age_d * 24, 1),
+                                        "pub_id": p.id, "channel_id": p.channel_id, "final": age_d > 59}
+                done["videos"] += 1
+    if done["videos"]:
+        _sig_path().write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+    return done
+
+
+def signal_features(sig: dict[str, Any] | None) -> dict[str, Any]:
+    """Resumo dos sinais de um vídeo (frações 0-1) para o aprendizado e o diagnóstico."""
+    if not sig or not sig.get("traffic"):
+        return {}
+    tr = sig["traffic"]
+    tot = sum(x["views"] for x in tr.values()) or 0
+    if tot < 20:
+        return {"views_an": tot}
+    groups: dict[str, int] = {g: 0 for g in ("feed", "search", "suggested", "browse", "external", "ads", "other")}
+    for src, x in tr.items():
+        g = TRAFFIC_GROUP.get(src, "other")
+        groups[g] = groups.get(g, 0) + x["views"]
+    top = max(tr.items(), key=lambda kv: kv[1]["views"])
+    # engajadas ÷ views ORGÂNICAS: views de anúncio pago (ADVERTISING) distorcem a razão e não contam para o YPP
+    org = {k: x for k, x in tr.items() if k != "ADVERTISING"}
+    ov = sum(x["views"] for x in org.values())
+    eng = sum(x["engaged"] for x in org.values())
+    feed = tr.get("SHORTS") or {}
+    out: dict[str, Any] = {"views_an": ov, "views_ads": tot - ov, "engaged_an": eng,
+                           "top_source": top[0], "top_source_label": TRAFFIC_LABELS.get(top[0], top[0].title()),
+                           **{f"share_{g}": round(v / tot, 3) for g, v in groups.items()}}
+    if ov >= 20:
+        out["engaged_ratio_an"] = round(eng / ov, 3)
+    if feed.get("views", 0) >= 20:
+        out["feed_engaged_ratio"] = round(feed["engaged"] / feed["views"], 3)
+    sub = sig.get("subscribed") or {}
+    sv = sum(x["views"] for x in sub.values())
+    if sv >= 20:
+        out["share_subscribed"] = round((sub.get("SUBSCRIBED") or {}).get("views", 0) / sv, 3)
+        uns = sub.get("UNSUBSCRIBED") or {}
+        if uns.get("views", 0) >= 20:
+            out["unsub_engaged_ratio"] = round(uns["engaged"] / uns["views"], 3)
+    dev = sig.get("device") or {}
+    dv = sum(dev.values())
+    if dv >= 20:
+        out["share_mobile"] = round(dev.get("MOBILE", 0) / dv, 3)
+        out["share_tv"] = round(dev.get("TV", 0) / dv, 3)
+        out["share_desktop"] = round(dev.get("DESKTOP", 0) / dv, 3)
+    return out
+
+
+# ================================================================ MAPA DE QUEDAS × CORTES DE CENA
+# Cruza a curva de retenção de cada Short com os tempos de corte das cenas: as quedas se concentram no 1º corte?
+
+def _curve_at_s(curve: list[list[float]], duration: float, t: float) -> float:
+    """audienceWatchRatio no segundo t (interpolado)."""
+    x = t / duration
+    pts = sorted((r[0], r[1]) for r in curve)
+    if x <= pts[0][0]:
+        return pts[0][1]
+    for (a, va), (b, vb) in zip(pts, pts[1:]):
+        if a <= x <= b:
+            return va + (vb - va) * ((x - a) / (b - a) if b > a else 0)
+    return pts[-1][1]
+
+
+def cut_drops(rows: list[dict[str, Any]] | None = None, channel_id: int | None = None, max_s: int = 60) -> dict[str, Any]:
+    """Para cada Short com curva e cenas: queda por segundo (pontos % do público inicial) e onde caem os cortes.
+    Agrega em segundos absolutos (0-60 s) e mede se a queda logo depois de cada corte é maior que a do resto."""
+    rows = rows if rows is not None else (channel_retention(channel_id) if channel_id else [])
+    bins = [{"s": i, "drop": [], "cuts": 0} for i in range(max_s)]
+    near_first, near_any, base, first_cut_t = [], [], [], []
+    per_video = []
+    for r in rows:
+        dur = float(r.get("duration") or 0)
+        curve = r.get("curve") or []
+        cuts = [float(x["end"]) for x in (r.get("scenes") or [])[:-1] if 0.3 < float(x["end"]) < dur - 0.5]
+        if not curve or dur <= 0 or dur > 180 or not cuts:
+            continue
+        start = max(_curve_at_s(curve, dur, 0.0), 0.01)
+        n = min(int(dur), max_s)
+        drop = [(_curve_at_s(curve, dur, i) - _curve_at_s(curve, dur, i + 1)) / start * 100 for i in range(n)]
+        for i, d in enumerate(drop):
+            bins[i]["drop"].append(d)
+        for c in cuts:
+            if int(c) < max_s:
+                bins[int(c)]["cuts"] += 1
+        first = cuts[0]
+        first_cut_t.append(first)
+        # janela de 1,5 s depois do corte × média por segundo do vídeo de 2 s ao fim (sem o swipe dos 2 primeiros s)
+        def win(t: float) -> float:
+            a = max(0.0, t - 0.25)
+            return (_curve_at_s(curve, dur, a) - _curve_at_s(curve, dur, a + 1.5)) / start * 100 / 1.5
+        tail = [d for i, d in enumerate(drop) if i >= 2 and all(abs(i - c) > 1.5 for c in cuts)]
+        b = _mean(tail) if tail else None
+        f = win(first)
+        o = [win(c) for c in cuts[1:]]
+        if b is not None:
+            base.append(b)
+            near_first.append(f)
+            near_any += o
+            per_video.append({"publication_id": r.get("publication_id"), "title": r.get("title", ""), "first_cut": round(first, 2),
+                              "drop_first_cut": round(f, 2), "drop_other_cuts": round(_mean(o), 2) if o else None,
+                              "drop_base": round(b, 2), "hook_drop": round(sum(drop[:2]), 1)})
+    heat = [{"s": x["s"], "drop": round(_mean(x["drop"]), 2) if x["drop"] else None, "videos": len(x["drop"]),
+             "cuts": x["cuts"]} for x in bins if x["drop"]]
+    out: dict[str, Any] = {"videos": len(per_video), "heatmap": heat, "per_video": per_video[:40]}
+    if len(per_video) >= 3:
+        bf, bo, bb = _mean(near_first), _mean(near_any) if near_any else None, _mean(base)
+        out.update({"first_cut_drop": round(bf, 2), "other_cut_drop": None if bo is None else round(bo, 2),
+                    "base_drop": round(bb, 2), "first_cut_median_s": round(sorted(first_cut_t)[len(first_cut_t) // 2], 1),
+                    "share_first_cut_worse": round(sum(1 for v in per_video if v["drop_first_cut"] > 1.5 * max(v["drop_base"], 0.05))
+                                                   / len(per_video), 2)})
+        out["first_cut_cluster"] = bool(bf > 1.8 * max(bb, 0.05) and out["share_first_cut_worse"] >= 0.6)
+        out["other_cut_cluster"] = bool(bo is not None and bo > 1.5 * max(bb, 0.05) and len(near_any) >= 6)
+    return out
+
+
+def _br(txt: str) -> str:
+    """Números com vírgula decimal (5.6 → 5,6)."""
+    import re as _re
+    return _re.sub(r"(\d)\.(\d)", r"\1,\2", txt)
+
+
+def cut_rule(channel_id: int, rows: list[dict[str, Any]] | None = None) -> str:
+    """Regra objetiva quando as quedas se concentram nos cortes (entra no prompt do roteirista e nas lições)."""
+    c = cut_drops(rows, channel_id)
+    if c.get("first_cut_cluster"):
+        return _br(f"O público sai no 1º CORTE (~{c['first_cut_median_s']:.1f}s): ali a queda é {c['first_cut_drop']:.1f} pontos/s × "
+                f"{c['base_drop']:.1f} no resto ({c['videos']} Shorts; em {round(c['share_first_cut_worse'] * 100)}% deles). "
+                "Não corte de cena antes de entregar a promessa do gancho: segure a 1ª imagem até ~3s e faça o 1º corte "
+                "num movimento (zoom/texto entrando), nunca numa tela parada ou de contexto.")
+    if c.get("other_cut_cluster"):
+        return _br(f"As quedas se concentram logo depois dos cortes de cena ({c['other_cut_drop']:.1f} × {c['base_drop']:.1f} "
+                f"pontos/s, {c['videos']} Shorts): emende as cenas com a frase continuando por cima do corte (sem pausa).")
+    return ""

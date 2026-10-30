@@ -71,6 +71,10 @@ def fetch_comments(ch: Channel, ctx: JobContext | None = None) -> int:
                 s.add(c)
             s.commit()
         suggest_replies(ch, ctx)
+        try:  # perguntas do público viram pautas ("respondendo @fulano")
+            ideas_from_comments(ch, ctx)
+        except Exception as e:  # noqa: BLE001
+            log.warning("pautas de comentários (%s): %s", ch.name, e)
     if ctx:
         ctx.log(f"{len(new)} comentário(s) novo(s)")
     waiting = [c for c in new if c.status == "new"]
@@ -135,12 +139,118 @@ Responda JSON: {{"items": [{{"i": 0, "kind": "pergunta|elogio|correcao|sugestao|
         s.commit()
 
 
+# ================================================================ perguntas do público → pautas
+
+COMMENT_IDEAS_PER_DAY = 2  # por canal: o público inspira, mas não toma conta da fila
+
+
+def _seen_file():
+    from .config import CACHE_DIR
+    return CACHE_DIR / "comment_ideas_seen.json"
+
+
+def _seen() -> set[str]:
+    import json
+    try:
+        return set(json.loads(_seen_file().read_text(encoding="utf-8")))
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _mark_seen(ids: set[str]) -> None:
+    import json
+    keep = sorted(_seen() | ids)[-5000:]
+    try:
+        _seen_file().write_text(json.dumps(keep), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def handle_of(author: str) -> str:
+    a = " ".join((author or "").split()).strip()
+    return a if a.startswith("@") else ("@" + a if a else "um espectador")
+
+
+def ideas_from_comments(ch: Channel, ctx: JobContext | None = None) -> list[int]:
+    """Perguntas reais do público viram pautas (origem "comment", ângulo "respondendo @fulano"): limite diário,
+    sem repetir comentário nem tema já existente. Cada pauta ainda passa pela checagem de fatos e pela nota."""
+    from .content import channel_brief, existing_titles
+    from .variety import _jaccard, _tokens
+    start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    with session() as s:
+        mine = s.exec(select(Idea).where(Idea.channel_id == ch.id, Idea.origin == "comment")).all()
+        cands = s.exec(select(Comment).where(Comment.channel_id == ch.id, Comment.kind == "pergunta",
+                                             Comment.status.in_(["new", "replied"]))
+                       .order_by(Comment.created_at.desc()).limit(60)).all()
+    done_today = sum(1 for i in mine if i.created_at and (i.created_at if i.created_at.tzinfo
+                                                         else i.created_at.replace(tzinfo=timezone.utc)) >= start)
+    left = COMMENT_IDEAS_PER_DAY - done_today
+    if left <= 0:
+        return []
+    used = {str(t)[11:] for i in mine for t in (i.tags or []) if str(t).startswith("comentario:")} | _seen()
+    week = datetime.now(timezone.utc) - timedelta(days=7)
+    cands = [c for c in cands if c.yt_id not in used and len((c.text or "").strip()) >= 15
+             and (c.created_at if c.created_at.tzinfo else c.created_at.replace(tzinfo=timezone.utc)) >= week]
+    cands.sort(key=lambda c: -c.likes)
+    cands = cands[:10]
+    if not cands:
+        return []
+    titles = existing_titles(ch.id, 150)
+    listing = "\n".join(f"[{i}] (no vídeo \"{c.video_title or c.video_id}\") {handle_of(c.author)}: {c.text[:400]}"
+                        for i, c in enumerate(cands))
+    data = llm.complete_json(f"""{channel_brief(ch)}
+
+Perguntas que o público deixou nos comentários do canal:
+{listing}
+
+Quais destas perguntas merecem um VÍDEO PRÓPRIO do canal respondendo? Só as que: são sobre o assunto do canal (não sobre
+a voz, o programa usado, o canal em si), têm resposta factual verificável, interessam a mais gente além de quem
+perguntou, não são respondidas no próprio vídeo comentado e não são ofensivas nem pedidos de opinião política.
+Na dúvida, deixe de fora. Para cada escolhida, proponha a pauta do vídeo-resposta (Short).
+Pautas que o canal já tem (não repita):
+{chr(10).join('- ' + t for t in titles[:80]) or '(nenhuma)'}
+
+Responda JSON: {{"ideas": [{{"i": 0, "title": "título de 35-50 caracteres, assunto concreto no começo",
+  "angle": "a pergunta central e o que o vídeo revela", "summary": "o que se sabe (2-3 frases factuais)"}}]}}""",
+                             temperature=0.4)
+    _mark_seen({c.yt_id for c in cands})  # avaliados: não gastam cota de novo no próximo ciclo
+    known = [set(_tokens(t)) for t in titles]
+    created: list[int] = []
+    for it in (data.get("ideas") or []) if isinstance(data, dict) else []:
+        if len(created) >= left or not isinstance(it, dict):
+            break
+        try:
+            c = cands[int(it.get("i"))]
+        except (TypeError, ValueError, IndexError):
+            continue
+        title = str(it.get("title") or "").replace("#Shorts", "").strip()[:200]
+        tok = set(_tokens(title))
+        if not title or any(tok and _jaccard(tok, k) >= 0.5 for k in known):
+            continue
+        who = handle_of(c.author)
+        with session() as s:
+            idea = Idea(channel_id=ch.id, title=title, format="short", origin="comment", status="new",
+                        angle=f"Respondendo {who}: {str(it.get('angle') or c.text)[:400]}",
+                        summary=str(it.get("summary") or c.text)[:1200],
+                        tags=[f"comentario:{c.yt_id}", f"autor:{who}"[:80], f"pergunta:{c.text.strip()[:160]}"])
+            s.add(idea)
+            s.commit()
+            s.refresh(idea)
+        known.append(tok)
+        created.append(idea.id)
+        enqueue("manual_idea", title=f"Checar pauta (pergunta de {who}): {title}", channel_id=ch.id, ref_id=idea.id)
+        if ctx:
+            ctx.log(f"Pergunta de {who} virou pauta: {title}")
+    return created
+
+
 def reply(comment_id: int, text: str) -> None:
     with session() as s:
         c = s.get(Comment, comment_id)
     acc = _account(c.channel_id)
     if not can_write(acc):
         raise RuntimeError("Reconecte o canal (Canais → Reconectar) para liberar a permissão de responder comentários")
+    __import__("lidark.quota", fromlist=["x"]).spend(50, "comment")  # medidor de cota diária
     _yt(acc).comments().insert(part="snippet", body={"snippet": {"parentId": c.yt_id, "textOriginal": text}}).execute()
     with session() as s:
         db = s.get(Comment, comment_id)
@@ -208,6 +318,7 @@ def crosslink(pub_id: int, ctx: JobContext | None = None) -> int:
         known = [p for p in longs if p.url == var.get("from_long") or (var.get("from_long_video") and p.video_id == var["from_long_video"])]
         for lp in (known or _related(pub, longs))[:1]:
             text = f"🎬 Quer a história completa? Vídeo longo no canal: {lp.title.strip()} → {lp.url}"
+            __import__("lidark.quota", fromlist=["x"]).spend(50, "comment")  # medidor de cota diária
             yt.commentThreads().insert(part="snippet", body={"snippet": {"videoId": pub.external_id, "topLevelComment": {
                 "snippet": {"textOriginal": text}}}}).execute()
             _mark(pub.id, lp.external_id)
@@ -218,6 +329,7 @@ def crosslink(pub_id: int, ctx: JobContext | None = None) -> int:
         first = [p for p in shorts if src and p.external_id == src]
         for sp in first + _related(pub, [p for p in shorts if p not in first])[:5 - len(first)]:
             text = f"🎬 Saiu o vídeo completo sobre isso: {pub.title.strip()} → {pub.url}"
+            __import__("lidark.quota", fromlist=["x"]).spend(50, "comment")  # medidor de cota diária
             yt.commentThreads().insert(part="snippet", body={"snippet": {"videoId": sp.external_id, "topLevelComment": {
                 "snippet": {"textOriginal": text}}}}).execute()
             _mark(sp.id, pub.external_id)
@@ -369,7 +481,8 @@ def yt_units_today() -> int:
         replies = s.exec(select(func.count()).select_from(Comment).where(Comment.replied_at >= start)).one()
     units = sum(YT_COST["publish"] if j.kind == "publish" else YT_COST["comment"] * int((j.result or {}).get("links") or 0)
                 for j in jobs_)
-    return units + YT_COST["comment"] * (int(seeds) + int(replies)) + 300
+    from . import quota  # medidor central (quota.py) — vale o maior dos dois
+    return max(quota.used(), units + YT_COST["comment"] * (int(seeds) + int(replies)) + 300)
 
 
 def _seed_later(pub: Publication, at: datetime, tries: int, why: str) -> None:
@@ -416,6 +529,7 @@ def post_seed(pub_id: int, ctx: JobContext | None = None) -> dict:
         return {"skipped": "sem texto"}
     from googleapiclient.errors import HttpError
     try:
+        __import__("lidark.quota", fromlist=["x"]).spend(50, "comment")  # medidor de cota diária
         resp = _yt(acc).commentThreads().insert(part="snippet", body={"snippet": {"videoId": pub.external_id, "topLevelComment": {
             "snippet": {"textOriginal": text}}}}).execute()
     except HttpError as e:

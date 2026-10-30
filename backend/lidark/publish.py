@@ -167,20 +167,40 @@ def yt_upload(acc: Account, pub: Publication, video: Video, sc: Script, ch: Chan
         status.update(privacyStatus="private", publishAt=live.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"))
         ctx.log(f"Enviado como privado; o YouTube publica às {live.astimezone():%H:%M}")
     body = {
+        # defaultAudioLanguage = pt-BR também é o que libera a dublagem automática do YouTube (sem API para faixas)
         "snippet": {"title": title, "description": desc[:4900], "tags": tags, "categoryId": ch.yt_category or "27",
                     "defaultLanguage": "pt-BR", "defaultAudioLanguage": "pt-BR"},
         "status": status,
     }
+    parts = "snippet,status"
+    from .channels import publish_prefs
+    if publish_prefs(ch.id).get("localize"):  # título/descrição em inglês e espanhol (1 tradução por vídeo, em cache)
+        try:
+            from .localize import build_localizations
+            core = (pub.description or sc.description or "").strip()
+            locs = build_localizations(video, title, core, desc[:4900])
+            if locs:
+                body["localizations"] = locs
+                parts += ",localizations"
+                ctx.log(f"Título e descrição também em: {', '.join(locs)}")
+        except Exception as e:  # noqa: BLE001
+            ctx.log(f"Tradução do título/descrição não feita: {e}")
+    from . import quota
+    proj = quota.project_of(acc)
+    if not quota.can(quota.COSTS["upload"], "upload", proj):
+        ctx.log("Aviso: o medidor de cota acha que o limite de envios de hoje acabou — tentando mesmo assim")
     media = MediaFileUpload(str(MEDIA_DIR / video.path), chunksize=8 * 1024 * 1024, resumable=True, mimetype="video/mp4")
-    req = yt.videos().insert(part="snippet,status", body=body, media_body=media)
+    req = yt.videos().insert(part=parts, body=body, media_body=media)
     resp = None
     while resp is None:
         status, resp = req.next_chunk()
         if status:
             ctx.update(0.1 + 0.8 * status.progress(), f"Enviando ao YouTube {int(status.progress() * 100)}%")
+    quota.spend(quota.COSTS["upload"], "upload", proj)
     vid = resp["id"]
     if video.thumbnail_path:
         try:
+            quota.spend(quota.COSTS["thumbnail"], "thumbnail", proj)
             yt.thumbnails().set(videoId=vid, media_body=MediaFileUpload(str(MEDIA_DIR / video.thumbnail_path),
                                                                         mimetype="image/jpeg")).execute()
             ctx.log("Miniatura enviada")
@@ -205,9 +225,14 @@ def yt_upload(acc: Account, pub: Publication, video: Video, sc: Script, ch: Chan
 
 def _add_to_series(yt, acc: Account, ch: Channel, series: str, vid: str, ctx: JobContext) -> None:
     """Coloca o vídeo na playlist da série (cria a playlist na primeira vez)."""
+    from . import quota
     scopes = (acc.credentials or {}).get("scopes") or []
     if "https://www.googleapis.com/auth/youtube" not in scopes:
         ctx.log("Playlists: reconecte o canal (Canais → Reconectar) para liberar a permissão de playlists")
+        return
+    proj = quota.project_of(acc)
+    if not quota.guard("playlist", 100, proj):
+        ctx.log("Playlist da série: cota do YouTube no limite — fica para a próxima")
         return
     with session() as s:
         playlists = dict((s.get(Channel, ch.id).playlists or {}))
@@ -216,6 +241,7 @@ def _add_to_series(yt, acc: Account, ch: Channel, series: str, vid: str, ctx: Jo
         body = {"snippet": {"title": series, "description": f"Série do canal {ch.name}: {series}.",
                             "defaultLanguage": "pt-BR"}, "status": {"privacyStatus": "public"}}
         pid = yt.playlists().insert(part="snippet,status", body=body).execute()["id"]
+        quota.spend(quota.COSTS["playlist"], "playlist", proj)
         with session() as s:
             db = s.get(Channel, ch.id)
             db.playlists = {**(db.playlists or {}), series: pid}
@@ -224,6 +250,7 @@ def _add_to_series(yt, acc: Account, ch: Channel, series: str, vid: str, ctx: Jo
         ctx.log(f"Playlist criada: {series}")
     yt.playlistItems().insert(part="snippet", body={"snippet": {"playlistId": pid, "resourceId": {
         "kind": "youtube#video", "videoId": vid}}}).execute()
+    quota.spend(quota.COSTS["playlist"], "playlist", proj)
     ctx.log(f"Adicionado à série “{series}”")
 
 
@@ -232,10 +259,16 @@ def yt_metrics(acc: Account, pubs: list[Publication]) -> dict[str, dict[str, Any
     out: dict[str, dict[str, Any]] = {}
     if not ids or not acc.credentials:
         return out
+    from . import quota
+    proj = quota.project_of(acc)
+    if not quota.guard("list", (len(ids) + 49) // 50, proj):  # métricas: prioridade baixa (param depois de 80% da cota)
+        log.info("métricas adiadas: cota do YouTube acima de 80%% hoje (%s)", acc.display_name)
+        return out
     creds = _yt_creds(acc)
     yt = _yt_client(creds)
     for i in range(0, len(ids), 50):
         r = yt.videos().list(part="statistics", id=",".join(ids[i:i + 50])).execute()
+        quota.spend(quota.COSTS["list"], "list", proj)
         for it in r.get("items", []):
             st = it.get("statistics", {})
             out[it["id"]] = {"views": int(st.get("viewCount", 0)), "likes": int(st.get("likeCount", 0)),
@@ -378,6 +411,19 @@ def job_publish(ctx: JobContext) -> dict:
     if acc.platform == "youtube":
         from .community import after_publish
         after_publish(pub.id, pub.channel_id)
+        from .channels import publish_prefs
+        prefs = publish_prefs(pub.channel_id)
+        if prefs.get("captions") and (video.format == "long" or prefs.get("captions_shorts")):
+            from .jobs import enqueue as _enq_c
+            _enq_c("upload_captions", title=f"Legendas oficiais: {pub.title.replace('#Shorts', '').strip()[:60]}",
+                   channel_id=pub.channel_id, ref_id=pub.id,  # 10 min: o YouTube termina de receber o vídeo antes
+                   payload={"langs": prefs.get("captions_langs"), "_not_before": __import__("time").time() + 600})
+        if prefs.get("studio_checklist"):
+            try:
+                from .studio_checklist import notify_after_publish
+                notify_after_publish(pub.id)
+            except Exception as e:  # noqa: BLE001
+                ctx.log(f"Checklist do Studio: {e}")
         if video.format == "long":  # maratona: episódio anterior → este, playlist e o Short campeão de origem → este
             from .jobs import enqueue as _enq
             _enq("binge_links", title=f"Links da série: {pub.title[:60]}", channel_id=pub.channel_id, ref_id=pub.id)
@@ -387,6 +433,41 @@ def job_publish(ctx: JobContext) -> dict:
             enqueue("shorts_from_long", title=f"Shorts a partir do longo: {pub.title[:60]}", channel_id=pub.channel_id,
                     ref_id=video.id)
     return {"url": url, "id": ext}
+
+
+@handler("upload_captions")
+def job_upload_captions(ctx: JobContext) -> dict:
+    """Legendas oficiais (.srt) do texto exato do roteiro com os tempos das legendas queimadas, em PT + EN/ES.
+    payload: langs, dry_run (só gera os .srt, sem enviar). Sem cota: reagenda para depois da renovação."""
+    from . import notify, quota
+    from .localize import upload_captions
+    langs = ctx.payload.get("langs") or ["pt-BR", "en", "es"]
+    ctx.update(0.1, "Montando as legendas")
+    r = upload_captions(ctx.ref_id, langs, dry_run=bool(ctx.payload.get("dry_run")), log_fn=ctx.log)
+    if r.get("skipped") == "scope":
+        with session() as s:
+            pub = s.get(Publication, ctx.ref_id)
+            ch = s.get(Channel, pub.channel_id) if pub else None
+        notify.push("failed", f"Reconecte {ch.name if ch else 'o canal'} para enviar legendas",
+                    "Falta a permissão youtube.force-ssl (legendas e comentários). Abra Canais → Reconectar; os arquivos "
+                    ".srt já estão salvos na pasta do vídeo.", link="/canais", channel_id=ch.id if ch else None,
+                    key=f"reconnect-captions:{ch.id if ch else 0}")
+        ctx.log("Sem a permissão youtube.force-ssl: legendas salvas em .srt, não enviadas")
+        return r
+    if r.get("pending") and not r.get("dry_run"):
+        at = quota.reset_at()
+        from .jobs import enqueue as _enq
+        j = _enq("upload_captions", title=f"Legendas oficiais (depois da renovação da cota): {ctx.ref_id}",
+                 channel_id=ctx.channel_id, ref_id=ctx.ref_id,
+                 payload={"langs": r["pending"], "_not_before": at.timestamp(), "tries": int(ctx.payload.get("tries", 0)) + 1})
+        from .models import Job
+        with session() as s:
+            db = s.get(Job, j.id)
+            db.stage = f"Cota do YouTube acima de 80% — envia às {at.astimezone():%d/%m %H:%M}"
+            s.add(db)
+            s.commit()
+        ctx.log(f"Cota do YouTube no limite: {', '.join(r['pending'])} ficam para depois da renovação")
+    return r
 
 
 @handler("collect_metrics")

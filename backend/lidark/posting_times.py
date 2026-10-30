@@ -31,6 +31,12 @@ HORIZON_H = 24  # janela da medição: views nas primeiras 24 h
 KERNEL_SIGMA = 1.5  # suaviza entre horas vizinhas (amostras são poucas)
 SHRINK_K = 4.0  # quantas "amostras equivalentes" o palpite inicial vale por hora
 MIN_SAMPLES = 3  # abaixo disso, só o palpite inicial
+# Palpite inicial (canal sem dados próprios), público brasileiro: Shorts ao meio-dia e às 19 h; longos entre 18 h e 21 h.
+# Quando o canal tem medições suficientes, os horários aprendidos mandam.
+NIGHT_SHORTS = [19, 12]  # ordem de preferência (1 Short/dia → 19 h)
+LONG_WINDOW = (18, 21)
+LONG_DEFAULT_HOUR = 19
+SISTER_GAP_HOURS = 2.0  # canais irmãos (mesmo dono/projeto) nunca postam a menos de 2 h um do outro
 
 DEFAULTS = {
     "mode": "manual",  # manual (horários fixos) | auto (pelos dados)
@@ -155,12 +161,13 @@ def suggest(channel_id: int) -> dict[str, Any]:
     from .focus import MODES, adjust_per_day, mode
     focused = adjust_per_day(ch, cfg["per_day"])  # modo foco: Foco +1/dia, Reduzido metade
     per_day = min(focused, cfg["new_channel_cap"]) if young else focused
-    picks = _pick(hours, per_day, cfg["min_gap_hours"])
+    picks = _pick(hours, per_day, cfg["min_gap_hours"], seed=None if use_data else NIGHT_SHORTS)
     data_w = sum(hours[h]["data_weight"] for h in picks) / len(picks) if picks else 0
     basis = []
     if not use_data:
-        basis.append(f"Só {len(samples)} Short(s) com medição de 24 h (mínimo {MIN_SAMPLES}): horários do perfil típico "
-                     "do público brasileiro de Shorts (almoço 11–13 h e noite 18–21 h).")
+        basis.append(f"Só {len(samples)} Short(s) com medição de 24 h (mínimo {MIN_SAMPLES}): palpite inicial para o público "
+                     "brasileiro — Shorts às 12 h e 19 h, vídeos longos entre 18 h e 21 h (Brasília). "
+                     "Quando o canal tiver dados, os horários aprendidos mandam.")
     else:
         basis.append(f"{len(samples)} Shorts medidos nas primeiras 24 h, comparados pela hora em que saíram; "
                      f"nos horários escolhidos os dados corrigem o perfil típico com peso ~{round(data_w * 100)}%.")
@@ -171,20 +178,27 @@ def suggest(channel_id: int) -> dict[str, Any]:
         basis.append(f"Canal novo ({age:.0f} dia(s)): no máximo {cfg['new_channel_cap']} Shorts/dia até {cfg['new_channel_days']} dias.")
     if focused != cfg["per_day"]:
         basis.append(f"Modo {MODES[mode(ch)]['label']}: {focused} Short(s)/dia em vez de {cfg['per_day']}.")
-    basis.append(f"Espaço mínimo entre posts: {cfg['min_gap_hours']:g} h. Fuso: Brasília.")
+    basis.append(f"Espaço mínimo entre posts: {cfg['min_gap_hours']:g} h; entre canais irmãos: {sister_gap():g} h. Fuso: Brasília.")
     return {"channel_id": channel_id, "name": ch.name, "mode": cfg["mode"], "settings": cfg,
             "slots": [f"{h:02d}:00" for h in sorted(picks)], "per_day": per_day,
+            "long_window": [f"{LONG_WINDOW[0]:02d}:00", f"{LONG_WINDOW[1]:02d}:00"], "long_default": f"{LONG_DEFAULT_HOUR:02d}:00",
             "young": young, "age_days": round(age, 1), "samples": len(samples), "uses_data": use_data,
             "basis": basis, "hours": hours, "weekdays": weekdays,
             "videos": sorted(({k: v for k, v in x.items() if k not in ("rel", "resid", "weight")} for x in samples),
                              key=lambda x: -x["views_24h"])[:30]}
 
 
-def _pick(hours: list[dict], n: int, gap: float) -> list[int]:
-    """Melhores horas da janela, respeitando o espaço mínimo entre elas."""
+def _pick(hours: list[dict], n: int, gap: float, seed: list[int] | None = None) -> list[int]:
+    """Melhores horas da janela, respeitando o espaço mínimo entre elas. `seed` = horas que entram primeiro
+    (palpite inicial sem dados: 19 h e 12 h)."""
     ranked = sorted((h for h in hours if WINDOW[0] <= h["hour"] <= WINDOW[1]), key=lambda h: -h["score"])
     for g in (gap, gap * 0.75, gap * 0.5):  # se não couber, aperta o espaço aos poucos
         picks: list[int] = []
+        for h0 in (seed or [])[:n]:
+            if all(_circ(h0, p) >= g for p in picks):
+                picks.append(h0)
+        if len(picks) >= n:
+            return picks
         for h in ranked:
             if all(_circ(h["hour"], p) >= g for p in picks):
                 picks.append(h["hour"])
@@ -234,6 +248,55 @@ def _busy_times(channel_id: int) -> list[tuple[datetime, bool]]:
     return out
 
 
+def sister_gap() -> float:
+    try:
+        from .channels import _all_publish_prefs
+        v = (_all_publish_prefs().get("_global") or {}).get("sister_gap_hours")
+        return max(0.0, min(6.0, float(v))) if v not in (None, "") else SISTER_GAP_HOURS
+    except Exception:  # noqa: BLE001
+        return SISTER_GAP_HOURS
+
+
+def _sister_times(channel_id: int) -> list[tuple[datetime, str]]:
+    """(horário UTC, canal) dos posts publicados/agendados dos OUTROS canais + disparos do piloto ainda sem publicação."""
+    since = datetime.now(timezone.utc) - timedelta(days=1)
+    with session() as s:
+        names = {c.id: c.name for c in s.exec(select(Channel)).all()}
+        pubs = s.exec(select(Publication).where(Publication.channel_id != channel_id,
+                                                Publication.status.in_(["scheduled", "uploading", "published"]))).all()
+    out, seen = [], set()
+    for p in pubs:
+        t = _utc(p.published_at if p.status == "published" else p.scheduled_at)
+        key = (p.channel_id, p.video_id or p.external_id or p.id)
+        if t and t >= since and key not in seen:
+            seen.add(key)
+            out.append((t, names.get(p.channel_id, f"canal {p.channel_id}")))
+    try:  # disparos do piloto automático (o vídeo ainda está sendo produzido)
+        from .scheduler import _state
+        for k, v in _state().items():
+            cid = k.split("|")[0]
+            if cid.isdigit() and int(cid) != channel_id and isinstance(v, str) and v[:1].isdigit():
+                t = _utc(datetime.fromisoformat(v))
+                if t >= since and all(abs(t - b) > timedelta(minutes=20) for b, _ in out):
+                    out.append((t, names.get(int(cid), f"canal {cid}")))
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def sister_conflict(channel_id: int, when: datetime, sisters: list[tuple[datetime, str]] | None = None) -> str | None:
+    """Outro canal do sistema posta a menos de 2 h deste horário? (os canais dividem o mesmo público inicial
+    e a mesma conta Google; posts colados competem entre si)."""
+    gap = sister_gap()
+    if gap <= 0:
+        return None
+    w = _utc(when)
+    for t, name in sisters if sisters is not None else _sister_times(channel_id):
+        if abs(t - w) < timedelta(hours=gap):
+            return f"{name} posta às {t.astimezone(TZ):%d/%m %H:%M} (canais irmãos a {gap:g} h de distância)"
+    return None
+
+
 def _guard(ch: Channel, extra: list[datetime] | None = None) -> tuple[dict, list, bool]:
     cfg = settings(ch)
     with session() as s:
@@ -242,10 +305,15 @@ def _guard(ch: Channel, extra: list[datetime] | None = None) -> tuple[dict, list
     busy = _busy_times(ch.id)
     # disparos do piloto que ainda não viraram publicação (os que já viraram estão a ±12 min de uma)
     busy += [(_utc(t), True) for t in extra or [] if all(abs(_utc(t) - b) > timedelta(minutes=20) for b, _ in busy)]
+    cfg = {**cfg, "_sisters": _sister_times(ch.id), "_channel_id": ch.id}
     return cfg, busy, _channel_age_days(ch, pubs) < cfg["new_channel_days"]
 
 
 def _why(cfg: dict, busy: list, young: bool, when: datetime, fmt: str) -> str | None:
+    if "_sisters" in cfg:
+        sis = sister_conflict(cfg.get("_channel_id", 0), when, cfg["_sisters"])
+        if sis:
+            return sis
     gap = timedelta(hours=cfg["min_gap_hours"])
     for t, _ in busy:
         if abs(t - when) < gap:
@@ -258,23 +326,35 @@ def _why(cfg: dict, busy: list, young: bool, when: datetime, fmt: str) -> str | 
     return None
 
 
-def conflict(ch: Channel, when: datetime, fmt: str = "short", extra: list[datetime] | None = None) -> str | None:
-    """Motivo para NÃO postar neste horário (espaço mínimo / limite diário de canal novo), ou None."""
-    return _why(*_guard(ch, extra), _utc(when), fmt)
+def conflict(ch: Channel, when: datetime, fmt: str = "short", extra: list[datetime] | None = None,
+             sisters: bool = True) -> str | None:
+    """Motivo para NÃO postar neste horário (canal irmão a < 2 h / espaço mínimo / limite diário de canal novo), ou None.
+    sisters=False: só as travas do próprio canal."""
+    cfg, busy, young = _guard(ch, extra)
+    if not sisters:
+        cfg.pop("_sisters", None)
+    return _why(cfg, busy, young, _utc(when), fmt)
 
 
-def next_free(ch: Channel, when: datetime, fmt: str = "short") -> datetime:
-    """Primeiro horário a partir de `when` que respeita as travas (passos de 30 min, só dentro da janela)."""
-    cfg, busy, young = _guard(ch)
-    t = _utc(when)
-    if not _why(cfg, busy, young, t, fmt):  # o horário pedido (mesmo fora da janela, se foi escolhido à mão)
-        return t
-    t = t.replace(minute=t.minute // 30 * 30, second=0, microsecond=0) + timedelta(minutes=30)  # segue em :00/:30
-    for _ in range(14 * 48):
-        if WINDOW[0] <= t.astimezone(TZ).hour <= WINDOW[1] and not _why(cfg, busy, young, t, fmt):
-            return t
-        t += timedelta(minutes=30)
-    return _utc(when)
+def next_free(ch: Channel, when: datetime, fmt: str = "short", extra: list[datetime] | None = None,
+              max_hours: float | None = None) -> datetime | None:
+    """Primeiro horário a partir de `when` que respeita as travas (passos de 30 min, só dentro da janela).
+    Sem `max_hours` (como antes): sempre devolve um horário. Com `max_hours`: None se nada couber até lá."""
+    cfg, busy, young = _guard(ch, extra)
+    t0 = _utc(when)
+    if not _why(cfg, busy, young, t0, fmt):  # o horário pedido (mesmo fora da janela, se foi escolhido à mão)
+        return t0
+    limit = t0 + timedelta(hours=max_hours) if max_hours else None
+    for c in ((cfg, {k: v for k, v in cfg.items() if k != "_sisters"}) if not limit else (cfg,)):
+        t = t0.replace(minute=t0.minute // 30 * 30, second=0, microsecond=0) + timedelta(minutes=30)  # segue em :00/:30
+        for _ in range(14 * 48):
+            if limit and t > limit:
+                return None
+            if WINDOW[0] <= t.astimezone(TZ).hour <= WINDOW[1] and not _why(c, busy, young, t, fmt):
+                return t
+            t += timedelta(minutes=30)
+        # 2ª volta (sem limite): canais irmãos ocupando tudo — ignora só a trava entre irmãos
+    return None if limit else t0
 
 
 # ---------------------------------------------------------------- ritmo inicial de cada vídeo (piloto de crescimento)

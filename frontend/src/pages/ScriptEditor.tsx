@@ -14,11 +14,30 @@ const WPS = 2.7
 
 /** Campos que o roteirista grava em variety (opcionais: roteiros antigos não têm). */
 type TitleLab = { options: string[]; scores: number[]; best: number; predicted?: boolean }
+type Opening = { type: string; text: string; onscreen?: string; motion?: string }
 type Variety = NonNullable<Script['variety']> & {
   title_options?: string[]; thumb_options?: string[]; pinned_comment?: string; title_lab?: TitleLab
   hook_style?: string; title_style?: string
+  opening_type?: string; opening_options?: Opening[]; opening?: Opening; loop?: boolean
 }
-type Full = Script & { variety?: Variety; videos: Video[] }
+/** Prosódia por cena (lida pela voz): ritmo, pausa depois da cena, palavras acentuadas e emoção. */
+type Delivery = { pace?: 'fast' | 'normal' | 'slow'; pause_after_ms?: number; emphasis?: string[]; emotion?: string }
+type SceneX = Scene & { delivery?: Delivery; loop?: boolean; opening?: { type?: string; onscreen?: string; motion?: string }; chapter?: string }
+type Full = Omit<Script, 'scenes'> & { scenes: SceneX[]; variety?: Variety; videos: Video[] }
+type YppRisk = { risk: 'ok' | 'atencao' | 'alto'; reasons: string[]; window?: number }
+
+const OPENING: Record<string, string> = { impact: 'Frase de impacto', question: 'Pergunta na tela', motion: 'Movimento visual' }
+const PACE: Record<string, string> = { fast: 'Rápido', normal: 'Normal', slow: 'Lento' }
+const EMOTIONS = ['neutra', 'tensão', 'surpresa', 'mistério', 'emoção', 'empolgação', 'seriedade', 'humor']
+const firstSentence = (t: string) => (t.trim().split(/(?<=[.!?…])\s+/)[0] ?? '')
+
+function YppBadge({ r }: { r?: YppRisk }) {
+  if (!r) return null
+  const cls = r.risk === 'alto' ? 'badge-bad' : r.risk === 'atencao' ? 'badge-warn' : 'badge-ok'
+  const label = r.risk === 'alto' ? 'Risco YPP alto' : r.risk === 'atencao' ? 'YPP: atenção' : 'YPP ok'
+  const tip = r.reasons.length ? r.reasons.join(' · ') : `Os últimos ${r.window ?? 10} roteiros do canal estão variados`
+  return <span className={clsx('badge text-[11px]', cls)} data-tip={tip} title={tip}><ShieldCheck size={10} />{label}</span>
+}
 
 function Card({ title, icon, hint, action, children, className }: { title: string; icon?: ReactNode; hint?: string; action?: ReactNode; children: ReactNode; className?: string }) {
   return (
@@ -42,6 +61,8 @@ export default function ScriptEditor() {
   const [s, setS] = useState<Full | null>(null)
   const [dirty, setDirty] = useState(false)
   useEffect(() => { if (data && !dirty) setS(data) }, [data, dirty])
+  // freio do YPP: o relatório de variedade do canal traz o risco de "conteúdo inautêntico" dos últimos 10 roteiros
+  const { data: vrep } = useApi<{ ypp_risk?: YppRisk }>(data ? `/channels/${data.channel_id}/variety` : null)
   if (!s || !data) return (
     <div aria-busy="true">
       <Skeleton className="h-3 w-24 mb-2" /><Skeleton className="h-7 w-[min(560px,80%)] mb-7" />
@@ -54,7 +75,7 @@ export default function ScriptEditor() {
 
   const v: Variety = s.variety ?? {}
   const upd = (p: Partial<Full>) => { setS({ ...s, ...p }); setDirty(true) }
-  const updScene = (i: number, p: Partial<Scene>) => upd({ scenes: s.scenes.map((x, j) => j === i ? { ...x, ...p } : x) })
+  const updScene = (i: number, p: Partial<SceneX>) => upd({ scenes: s.scenes.map((x, j) => j === i ? { ...x, ...p } : x) })
   const move = (i: number, d: number) => { const a = [...s.scenes]; const [x] = a.splice(i, 1); a.splice(i + d, 0, x); upd({ scenes: a }) }
   const save = () => act(() => api(`/scripts/${id}`, { method: 'PUT', body: s }), 'Roteiro salvo').then(() => { setDirty(false); invalidate('/scripts') })
   /** Troca um campo com um clique: com edições pendentes só muda no editor (vai junto no Salvar); senão grava na hora. */
@@ -73,6 +94,28 @@ export default function ScriptEditor() {
   const scoreOf = (t: string) => { const k = lab?.options?.indexOf(t) ?? -1; return k >= 0 ? lab!.scores[k] : null }
   const maxScore = lab?.scores?.length ? Math.max(...lab.scores) : 0
   const thumbOpts = [...new Set([s.thumbnail_text, ...(v.thumb_options ?? [])].filter(Boolean))]
+
+  const isShort = s.format !== 'long'
+  const openings = (v.opening_options ?? []).filter(o => o && o.text)
+  /** Troca a abertura: a 1ª frase da cena 1 vira a fala da opção, e a cena 1 leva a dica de tela/movimento. */
+  const pickOpening = (o: Opening) => {
+    const first = s.scenes[0]
+    if (!first) return
+    const cur = v.opening?.text || firstSentence(first.text)
+    const rest = cur && first.text.startsWith(cur) ? first.text.slice(cur.length) : first.text.slice(firstSentence(first.text).length)
+    const cue = { type: o.type, ...(o.onscreen ? { onscreen: o.onscreen } : {}), ...(o.motion ? { motion: o.motion } : {}) }
+    const scenes = [{ ...first, text: (o.text + rest).trim(), opening: cue }, ...s.scenes.slice(1)]
+    quick({ scenes, hook: o.text, variety: { ...v, opening_type: o.type, opening: o } }, 'Abertura trocada')
+  }
+  /** Loop perfeito: a última cena emenda na primeira (a montagem tira a costura). */
+  const setLoop = (on: boolean) => {
+    const last = s.scenes.length - 1
+    const scenes = s.scenes.map((x, j) => {
+      const { loop: _l, ...rest } = x
+      return on && j === last ? { ...rest, loop: true } : rest
+    })
+    quick({ scenes, variety: { ...v, loop: on } }, on ? 'Loop ligado' : 'Loop desligado')
+  }
 
   return (
     <div className="pb-20">
@@ -130,12 +173,51 @@ export default function ScriptEditor() {
             <div className="min-w-0">
               <div className="font-semibold">Nota do editor-chefe</div>
               <div className="text-xs text-muted">gancho, ritmo, clareza, retenção e precisão</div>
-              {(v.structure || v.hook_style) && <div className="flex flex-wrap gap-1 mt-2">
+              <div className="flex flex-wrap gap-1 mt-2">
                 {v.structure && <span className="badge text-[11px]"><Layers size={10} />{STRUCT[v.structure] ?? v.structure}</span>}
                 {v.series && <span className="badge text-[11px]">{v.series}</span>}
-              </div>}
+                <YppBadge r={vrep?.ypp_risk} />
+              </div>
             </div>
           </div>
+
+          {vrep?.ypp_risk && vrep.ypp_risk.risk !== 'ok' && (
+            <Callout tone="warn" icon={<AlertTriangle size={15} />}>
+              <div className="font-medium mb-1">{vrep.ypp_risk.risk === 'alto' ? 'Canal com cara de produção em série' : 'Variedade do canal pede atenção'}</div>
+              <ul className="text-[12.5px] text-muted space-y-0.5">{vrep.ypp_risk.reasons.map((r, k) => <li key={k}>• {r}</li>)}</ul>
+              <div className="text-[12px] text-faint mt-1">Os próximos roteiros já sorteiam outras escolhas; varie também este, se der.</div>
+            </Callout>
+          )}
+
+          {isShort && (openings.length > 0 || v.loop !== undefined) && (
+            <Card title="Abertura e final" icon={<Sparkles size={14} />} hint="Os 2 primeiros segundos decidem se a pessoa assiste ou desliza">
+              {openings.length > 0 && (
+                <div className="space-y-1.5 mb-3">
+                  {openings.map(o => {
+                    const cur = (v.opening_type ?? v.opening?.type) === o.type
+                    return (
+                      <button key={o.type} disabled={cur} onClick={() => pickOpening(o)}
+                        className={clsx('w-full text-left px-2.5 py-2 rounded-[var(--r-sm)] border transition-colors',
+                          cur ? 'border-accent/45 bg-accent/[0.08] cursor-default' : 'border-line hover:border-line2 hover:bg-white/[0.03]')}>
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className={clsx('w-4 h-4 rounded-full border grid place-items-center shrink-0', cur ? 'bg-grad border-transparent text-white' : 'border-line3')}>{cur && <Check size={10} strokeWidth={3} />}</span>
+                          <span className="text-[11.5px] font-semibold uppercase tracking-wide text-muted">{OPENING[o.type] ?? o.type}</span>
+                        </div>
+                        <div className="text-[13px] pl-6">{o.text}</div>
+                        {o.onscreen && <div className="text-[11.5px] text-faint pl-6 mt-0.5">Na tela: “{o.onscreen}”</div>}
+                        {o.motion && <div className="text-[11.5px] text-faint pl-6 mt-0.5">Movimento: {o.motion}</div>}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+              <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                <input type="checkbox" className="mt-0.5 accent-[var(--accent)]" checked={!!v.loop} onChange={e => setLoop(e.target.checked)} />
+                <span className="text-[13px]"><span className="font-medium">Loop perfeito</span>
+                  <span className="block text-[11.5px] text-muted">A última cena emenda na primeira, para o replay sair sem costura. Use em parte dos Shorts, não em todos.</span></span>
+              </label>
+            </Card>
+          )}
 
           {s.fact_check?.length > 0 && (
             <Card title="Alertas de checagem" icon={<AlertTriangle size={14} className="text-warn" />}>
@@ -240,7 +322,7 @@ function DataEditor({ value, onChange }: { value: any; onChange: (v: any) => voi
 }
 
 function SceneCard({ i, sc, total, scriptId, onChange, onMove, onDelete, onRewritten }: {
-  i: number; sc: Scene; total: number; scriptId: number; onChange: (p: Partial<Scene>) => void
+  i: number; sc: SceneX; total: number; scriptId: number; onChange: (p: Partial<SceneX>) => void
   onMove: (d: number) => void; onDelete: () => void; onRewritten: () => void
 }) {
   const [busy, setBusy] = useState(false)
@@ -284,6 +366,40 @@ function SceneCard({ i, sc, total, scriptId, onChange, onMove, onDelete, onRewri
       </div>
       <input className="input !h-8 text-xs mt-2" placeholder="palavras em destaque na legenda, separadas por vírgula" value={(sc.emphasis ?? []).join(', ')}
         onChange={e => onChange({ emphasis: e.target.value.split(',').map(x => x.trim()).filter(Boolean) })} />
+      <DeliveryEditor d={sc.delivery} onChange={delivery => onChange({ delivery })} />
+      {(sc.loop || sc.opening?.onscreen || sc.opening?.motion) && (
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          {sc.loop && <span className="badge badge-accent text-[11px]">emenda na cena 1 (loop)</span>}
+          {sc.opening?.onscreen && <span className="badge text-[11px]">na tela: “{sc.opening.onscreen}”</span>}
+          {sc.opening?.motion && <span className="badge text-[11px]">movimento: {sc.opening.motion}</span>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Prosódia da cena: a voz acelera, desacelera, pausa e acentua palavras conforme o que está aqui. */
+function DeliveryEditor({ d, onChange }: { d?: Delivery; onChange: (d: Delivery) => void }) {
+  const cur: Delivery = d ?? {}
+  const set = (p: Partial<Delivery>) => onChange({ pace: 'normal', pause_after_ms: 0, emphasis: [], emotion: 'neutra', ...cur, ...p })
+  return (
+    <div className="flex flex-wrap items-center gap-2 mt-2 text-xs">
+      <span className="text-faint">Voz</span>
+      <div className="seg">
+        {(['fast', 'normal', 'slow'] as const).map(p => (
+          <button key={p} data-active={(cur.pace ?? 'normal') === p} onClick={() => set({ pace: p })}>{PACE[p]}</button>
+        ))}
+      </div>
+      <label className="flex items-center gap-1 text-muted" data-tip="Silêncio depois da cena (ms)">
+        pausa
+        <input type="number" min={0} max={1500} step={100} className="input !h-8 !w-20 text-xs" value={cur.pause_after_ms ?? 0}
+          onChange={e => set({ pause_after_ms: Math.max(0, Math.min(1500, Number(e.target.value) || 0)) })} />
+      </label>
+      <select className="input !w-auto !h-8 text-xs" value={cur.emotion ?? 'neutra'} onChange={e => set({ emotion: e.target.value })}>
+        {EMOTIONS.map(x => <option key={x} value={x}>{x}</option>)}
+      </select>
+      <input className="input !h-8 text-xs flex-1 min-w-40" placeholder="palavras que a voz acentua" value={(cur.emphasis ?? []).join(', ')}
+        onChange={e => set({ emphasis: e.target.value.split(',').map(x => x.trim()).filter(Boolean) })} />
     </div>
   )
 }

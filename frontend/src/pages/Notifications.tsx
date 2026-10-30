@@ -3,12 +3,12 @@ import { useNavigate } from 'react-router-dom'
 import clsx from 'clsx'
 import {
   Bell, CheckCheck, Rocket, TrendingDown, AlertTriangle, Clapperboard, Send, MessageSquare, Trophy, Bot, Flame, Gauge, Info,
-  ExternalLink, type LucideIcon,
+  ExternalLink, ListChecks, Smartphone, Check, X, type LucideIcon,
 } from 'lucide-react'
 import { api, invalidate, useApi, type Notification } from '../api'
 import { act, ago, ChannelTag, Empty, PageHeader, Skeleton, Tabs } from '../ui'
 
-type Item = Notification & { channel_id?: number | null }
+type Item = Notification & { channel_id?: number | null; key?: string }
 type Resp = { items: Item[]; unread: number }
 
 const KINDS: Record<string, { label: string; icon: LucideIcon; tone: string }> = {
@@ -22,12 +22,31 @@ const KINDS: Record<string, { label: string; icon: LucideIcon; tone: string }> =
   ypp: { label: 'Marco do YPP', icon: Trophy, tone: 'text-warn' },
   autopilot: { label: 'Piloto automático', icon: Bot, tone: 'text-accent' },
   trend: { label: 'Tendência', icon: Flame, tone: 'text-warn' },
-  quota: { label: 'Cota de IA', icon: Gauge, tone: 'text-warn' },
+  quota: { label: 'Cota', icon: Gauge, tone: 'text-warn' },
+  checklist: { label: 'Checklist do Studio', icon: ListChecks, tone: 'text-info' },
+  approval: { label: 'Aprovar', icon: Smartphone, tone: 'text-accent' },
+}
+
+/** Aprovação (mesmos botões do aviso no celular): "approval:<tipo>:<id>" → POST /publish2/approval/<tipo>/<id>/<ação>. */
+function ApprovalButtons({ n }: { n: Item }) {
+  const [, kind, id] = (n.key ?? '').split(':')
+  const [done, setDone] = useState('')
+  if (!kind || !id) return null
+  if (done) return <div className="text-[12px] text-muted mt-1.5">{done}</div>
+  const go = (action: 'approve' | 'reject') => act(() => api<{ message: string; already?: boolean }>(`/publish2/approval/${kind}/${id}/${action}`, { body: {} }))
+    .then(r => { if (r) { setDone(r.message + (r.already ? ' (já estava decidido)' : '')); invalidate('/notifications') } })
+  return (
+    <div className="flex gap-2 mt-2" onClick={e => e.stopPropagation()}>
+      <button className="btn btn-sm btn-primary" onClick={() => go('approve')}><Check size={13} /> Aprovar</button>
+      <button className="btn btn-sm" onClick={() => go('reject')}><X size={13} /> Recusar</button>
+    </div>
+  )
 }
 const meta = (k: string) => KINDS[k] ?? { label: 'Aviso', icon: Info, tone: 'text-muted' }
 
 const FILTERS = {
-  all: '', unread: '', perf: 'breakout,flop,ypp', prod: 'ready,review,published,failed,quota', growth: 'autopilot,trend,comments',
+  all: '', unread: '', approval: 'approval', perf: 'breakout,flop,ypp', prod: 'ready,review,published,failed,quota,checklist',
+  growth: 'autopilot,trend,comments',
 } as const
 type F = keyof typeof FILTERS
 
@@ -53,7 +72,7 @@ export default function Notifications() {
           <CheckCheck size={14} /> Marcar tudo como lido</button>} />
       <div className="mb-4">
         <Tabs value={f} onChange={setF} items={[
-          { key: 'all', label: 'Todas' }, { key: 'unread', label: 'Não lidas', count: data?.unread },
+          { key: 'all', label: 'Todas' }, { key: 'unread', label: 'Não lidas', count: data?.unread }, { key: 'approval', label: 'Aprovar' },
           { key: 'perf', label: 'Desempenho' }, { key: 'prod', label: 'Produção' }, { key: 'growth', label: 'Crescimento' },
         ]} />
       </div>
@@ -80,6 +99,7 @@ export default function Notifications() {
                     </div>
                   </div>
                 </button>
+                {n.kind === 'approval' && !n.read && <div className="pl-[60px] pb-3 -mt-1"><ApprovalButtons n={n} /></div>}
               </li>
             )
           })}

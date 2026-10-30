@@ -397,3 +397,264 @@ def trend_ideas(channel_id: int, limit: int = 30) -> list[dict[str, Any]]:
                     "urgency": next((t.split(":", 1)[1].strip() for t in tags if str(t).startswith("urgência:")), ""),
                     "created_at": i.created_at.isoformat() if i.created_at else None})
     return out
+
+
+# ---------------------------------------------------------------- radar de outliers (método "1 em 10")
+# Vídeos do nicho (PT-BR e EN) com views ÷ média do PRÓPRIO canal ≥ 5x: o tema puxou, não o tamanho do canal.
+# Só métricas públicas (views do vídeo, views totais ÷ vídeos do canal). Nada é copiado: cada outlier vira um TEMA
+# para adaptar com pesquisa própria. Cota: 2 buscas (200 unidades) + ~4 leituras por canal, no máximo 1x por dia.
+
+OUTLIER_MIN_RATIO = 5.0
+OUTLIER_TTL_H = 24
+OUTLIER_DAYS = 21
+_outlier_running: set[int] = set()
+
+
+def _outlier_path(channel_id: int):
+    return _snap_path(channel_id).with_name(f"outliers_{channel_id}.json")
+
+
+def _units_path():
+    return _snap_path(0).with_name("api_units.json")
+
+
+def radar_units_today() -> int:
+    """Unidades gastas hoje pelas buscas do radar de outliers (o yt_units_today da comunidade não as conta)."""
+    from .community import _quota_day_start
+    try:
+        d = json.loads(_units_path().read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return 0
+    return int(d.get("units", 0)) if d.get("day") == _quota_day_start().isoformat() else 0
+
+
+def _spend(units: int) -> None:
+    from .community import _quota_day_start
+    day = _quota_day_start().isoformat()
+    _units_path().write_text(json.dumps({"day": day, "units": radar_units_today() + units}), encoding="utf-8")
+    try:  # medidor central da cota (quota.py), quando existe
+        from . import quota
+        quota.spend(units, "search" if units >= 100 else "list")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _quota_ok(extra: int) -> bool:
+    try:
+        from . import quota
+        return quota.guard("search", extra)  # busca é a prioridade mais baixa: para nos 80% do dia
+    except ImportError:
+        pass
+    from . import config
+    from .community import YT_DAILY_QUOTA, YT_RESERVE, yt_units_today
+    q = int(config.get("yt_daily_quota") or YT_DAILY_QUOTA)
+    return yt_units_today() + radar_units_today() + extra + 300 < q - YT_RESERVE
+
+
+def ensure_keywords_en(ch: Channel) -> list[str]:
+    radar_ = dict(ch.radar or {})
+    if radar_.get("keywords_en"):
+        return radar_["keywords_en"]
+    data = llm.complete_json(f"""YouTube channel niche: {ch.niche}. Audience: {ch.audience}.
+List 6 English YouTube SEARCH keywords (2-3 words each) that an English-speaking audience types for this same niche.
+Answer JSON: {{"keywords": ["..."]}}""", temperature=0.3, required=["keywords"])
+    kws = [k for k in (data.get("keywords") or []) if isinstance(k, str)][:6] if isinstance(data, dict) else []
+    if kws:
+        with session() as s:
+            db = s.get(Channel, ch.id)
+            db.radar = {**(db.radar or {}), "keywords_en": kws}
+            s.add(db)
+            s.commit()
+    return kws
+
+
+_PT_MARK = re.compile(r"[ãõçáéíóúâêô]|\b(de|que|você|voce|não|nao|uma|para|como|por que|o que)\b", re.I)
+
+
+def _lang_of(sn: dict[str, Any]) -> str:
+    """'pt' | 'en' | '' (desconhecido): idioma declarado do áudio/vídeo; sem declaração, pistas do título."""
+    decl = str(sn.get("defaultAudioLanguage") or sn.get("defaultLanguage") or "").lower()
+    if decl.startswith("pt"):
+        return "pt"
+    if decl.startswith("en"):
+        return "en"
+    if decl:
+        return decl[:2]
+    return "pt" if _PT_MARK.search(sn.get("title") or "") else "en"
+
+
+def _search_outliers(yt, kws: list[str], lang: str) -> list[dict[str, Any]]:
+    after = (datetime.now(timezone.utc) - timedelta(days=OUTLIER_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    region = "BR" if lang == "pt" else "US"
+    res = yt.search().list(part="id", q="|".join(kws[:5]), type="video", order="viewCount", regionCode=region,
+                           relevanceLanguage=lang, publishedAfter=after, maxResults=50).execute().get("items") or []
+    _spend(SEARCH_COST)
+    ids = [r["id"]["videoId"] for r in res if (r.get("id") or {}).get("videoId")]
+    if not ids:
+        return []
+    items = yt.videos().list(part="snippet,statistics,contentDetails", id=",".join(ids[:50])).execute().get("items") or []
+    _spend(1)
+    chan_ids = sorted({(it.get("snippet") or {}).get("channelId") for it in items} - {None})
+    stats: dict[str, dict[str, int]] = {}
+    for i in range(0, len(chan_ids), 50):
+        for c in yt.channels().list(part="statistics", id=",".join(chan_ids[i:i + 50])).execute().get("items") or []:
+            st = c.get("statistics") or {}
+            stats[c["id"]] = {"views": int(st.get("viewCount") or 0), "videos": int(st.get("videoCount") or 0),
+                              "subs": int(st.get("subscriberCount") or 0)}
+        _spend(1)
+    out = []
+    for it in items:
+        sn, st = it.get("snippet") or {}, it.get("statistics") or {}
+        cs = stats.get(sn.get("channelId") or "") or {}
+        if not cs.get("videos"):
+            continue
+        avg = cs["views"] / max(1, cs["videos"])
+        views = int(st.get("viewCount") or 0)
+        ratio = views / max(1.0, avg)
+        dur = _iso_dur(((it.get("contentDetails") or {}).get("duration")) or "")
+        if _lang_of(sn) not in (lang, ""):  # relevanceLanguage não é estrito: separa PT de EN pelo idioma do vídeo
+            continue
+        out.append({"id": it["id"], "lang": lang, "title": sn.get("title", ""), "channel": sn.get("channelTitle", ""),
+                    "channel_avg": round(avg), "channel_subs": cs.get("subs", 0), "views": views,
+                    "ratio": round(ratio, 1), "short": 0 < dur <= 180, "duration": dur,
+                    "age_days": round(_hours_since(sn.get("publishedAt") or "") / 24, 1),
+                    "thumbnail": ((sn.get("thumbnails") or {}).get("medium") or {}).get("url", ""),
+                    "url": f"https://youtube.com/{'shorts/' if 0 < dur <= 180 else 'watch?v='}{it['id']}"})
+    min_views = 10_000 if lang == "pt" else 50_000
+    return sorted([x for x in out if x["ratio"] >= OUTLIER_MIN_RATIO and x["views"] >= min_views], key=lambda x: -x["ratio"])
+
+
+def _pt_coverage(query: str) -> dict[str, Any]:
+    """Quanto o tema já existe em português (busca gratuita via yt-dlp, sem cota)."""
+    try:
+        rows = youtube_search(query, 8)
+    except Exception:  # noqa: BLE001
+        rows = []
+    big = [r for r in rows if r["views"] >= 100_000]
+    mid = [r for r in rows if r["views"] >= 20_000]
+    return {"query": query, "best_views": max((r["views"] for r in rows), default=0),
+            "covered": bool(big) or len(mid) >= 3, "results": len(rows)}
+
+
+def _themes(ch: Channel, rows: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+    """IA transforma cada outlier num TEMA próprio em português (sem copiar título nem roteiro) + busca para checar."""
+    if not rows:
+        return {}
+    lines = "\n".join(f"{r['id']} | {r['lang']} | {r['title']} | {r['ratio']}x a média do canal" for r in rows)
+    data = llm.complete_json(f"""{content.channel_brief(ch)}
+
+Vídeos que foram MUITO acima da média do próprio canal (outliers), em português e em inglês:
+{lines}
+
+Para cada um, extraia o TEMA de fundo e proponha um ângulo PRÓPRIO para este canal, em português do Brasil.
+Proibido copiar o título ou a estrutura do vídeo original: é só a pista de que o assunto interessa. O fato tem de ser
+real e pesquisável. Inclua uma busca curta em português para conferir se o tema já foi coberto no YouTube brasileiro.
+Responda JSON: {{"items": [{{"id": "...", "theme": "tema em 3-8 palavras", "title": "título original nosso",
+"angle": "ângulo próprio em 1 frase", "query_pt": "busca em português"}}]}}""", temperature=0.5, required=["items"])
+    out = {}
+    for it in (data.get("items") or []) if isinstance(data, dict) else []:
+        if isinstance(it, dict) and it.get("id"):
+            out[str(it["id"])] = {k: str(it.get(k) or "") for k in ("theme", "title", "angle", "query_pt")}
+    return out
+
+
+def refresh_outliers(channel_id: int) -> dict[str, Any]:
+    with session() as s:
+        ch = s.get(Channel, channel_id)
+    if not ch:
+        return {}
+    yt = _yt_for(channel_id)
+    if yt is None:
+        data = {"at": datetime.now(timezone.utc).isoformat(), "error": "Canal sem login do YouTube (conecte para usar a API).",
+                "pt": [], "en": [], "gaps": []}
+        _outlier_path(channel_id).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        return data
+    rows: dict[str, list] = {"pt": [], "en": []}
+    notes = []
+    for lang, kws in (("pt", ensure_keywords(ch)), ("en", ensure_keywords_en(ch))):
+        if not kws:
+            continue
+        if not _quota_ok(SEARCH_COST + 5):
+            notes.append(f"Busca {lang.upper()} pulada: cota do YouTube de hoje está apertada.")
+            continue
+        try:
+            rows[lang] = _search_outliers(yt, kws, lang)[:12]
+        except Exception as e:  # noqa: BLE001
+            notes.append(f"Busca {lang.upper()}: {str(e)[:160]}")
+    picked = rows["pt"][:8] + rows["en"][:8]
+    try:
+        themes = _themes(ch, picked)
+    except Exception as e:  # noqa: BLE001
+        log.info("outliers temas: %s", e)
+        themes = {}
+    for r in rows["pt"] + rows["en"]:
+        for k, v in (themes.get(r["id"]) or {"theme": "", "title": "", "angle": "", "query_pt": ""}).items():
+            r[f"idea_{k}" if k == "title" else k] = v
+    # temas em alta em inglês que ainda não existem em português (lacuna = oportunidade)
+    en = [r for r in rows["en"][:8] if r.get("query_pt")]
+    with ThreadPoolExecutor(4) as ex:
+        cov = list(ex.map(lambda r: _pt_coverage(r["query_pt"]), en))
+    gaps = []
+    for r, c in zip(en, cov):
+        r["pt_coverage"] = c
+        if not c["covered"]:
+            gaps.append(r["id"])
+    data = {"at": datetime.now(timezone.utc).isoformat(), "pt": rows["pt"], "en": rows["en"], "gaps": gaps,
+            "notes": notes, "min_ratio": OUTLIER_MIN_RATIO, "days": OUTLIER_DAYS, "units_today": radar_units_today()}
+    _outlier_path(channel_id).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return data
+
+
+def outliers(channel_id: int, refresh: bool = False) -> dict[str, Any]:
+    """Foto do radar de outliers. Velha (> 24 h) ou pedida: atualiza em segundo plano (1x por vez por canal)."""
+    import threading
+    try:
+        data = json.loads(_outlier_path(channel_id).read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        data = {}
+    age_h = _hours_since(data["at"]) if data.get("at") else 9999
+    if (refresh and age_h > 1) or age_h > OUTLIER_TTL_H:
+        if channel_id not in _outlier_running:
+            _outlier_running.add(channel_id)
+
+            def run() -> None:
+                try:
+                    refresh_outliers(channel_id)
+                except Exception:  # noqa: BLE001
+                    log.exception("radar de outliers")
+                finally:
+                    _outlier_running.discard(channel_id)
+            threading.Thread(target=run, daemon=True, name=f"outliers-{channel_id}").start()
+    return {**data, "running": channel_id in _outlier_running, "age_hours": None if age_h >= 9999 else round(age_h, 1)}
+
+
+def outlier_idea(channel_id: int, video_id: str) -> dict[str, Any]:
+    """Cria a pauta (origem "trend") a partir do TEMA de um outlier — adaptar com pesquisa própria, nunca copiar."""
+    try:
+        data = json.loads(_outlier_path(channel_id).read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        data = {}
+    r = next((x for x in (data.get("pt") or []) + (data.get("en") or []) if x["id"] == video_id), None)
+    if not r:
+        raise ValueError("Outlier não encontrado (o radar pode ter atualizado)")
+    title = (r.get("idea_title") or r.get("theme") or "").strip()[:200]
+    if not title:
+        raise ValueError("Esse outlier ainda não tem tema adaptado (a IA não respondeu) — atualize o radar")
+    gap = video_id in (data.get("gaps") or [])
+    angle = (r.get("angle") or "") + (" Tema em alta em inglês e ainda pouco coberto em português." if gap else "")
+    evidence = (f"outlier {r['ratio']}x a média do canal {r['channel']} ({r['views']:,} views, "
+                f"{'EN' if r['lang'] == 'en' else 'PT'})").replace(",", ".")
+    with session() as s:
+        idea = Idea(channel_id=channel_id, title=title, angle=angle.strip(),
+                    summary=f"Tema: {r.get('theme') or title}. Adaptar com pesquisa própria (fontes primárias); "
+                            "não usar título, roteiro nem imagens do vídeo de referência.",
+                    format="short", origin="trend",
+                    tags=[f"🔥 {evidence}"[:300], f"urgência: {'alta' if gap or r['ratio'] >= 10 else 'media'}",
+                          f"outlier:{video_id}"])
+        s.add(idea)
+        s.commit()
+        s.refresh(idea)
+        iid = idea.id
+    enqueue("score_idea", title="Avaliar pauta do radar de outliers", channel_id=channel_id, ref_id=iid)
+    enqueue("verify_idea", title="Checar fatos da pauta", channel_id=channel_id, ref_id=iid)
+    return {"ok": True, "idea_id": iid, "title": title}

@@ -89,8 +89,10 @@ def _yt_for_channel(channel_id: int):
 
 
 def sync_profile(channel_id: int) -> dict[str, Any]:
+    from . import quota
     acc, yt = _yt_for_channel(channel_id)
     r = yt.channels().list(part="snippet,statistics,brandingSettings,contentDetails", mine=True).execute()
+    quota.spend(quota.COSTS["list"], "list", quota.project_of(acc))
     item = (r.get("items") or [{}])[0]
     sn, st, br = item.get("snippet", {}), item.get("statistics", {}), item.get("brandingSettings", {})
     thumbs = sn.get("thumbnails", {})
@@ -146,9 +148,12 @@ def import_videos(channel_id: int, ctx: JobContext | None = None, limit: int = 4
         uploads = (s.get(Channel, channel_id).stats or {}).get("uploads")
     if not uploads:
         return 0
+    from . import quota
+    proj = quota.project_of(acc)
     ids, token = [], None
     while len(ids) < limit:
         r = yt.playlistItems().list(part="contentDetails", playlistId=uploads, maxResults=50, pageToken=token).execute()
+        quota.spend(quota.COSTS["list"], "list", proj)
         ids += [it["contentDetails"]["videoId"] for it in r.get("items", [])]
         token = r.get("nextPageToken")
         if not token:
@@ -156,6 +161,7 @@ def import_videos(channel_id: int, ctx: JobContext | None = None, limit: int = 4
     n = 0
     for i in range(0, len(ids), 50):
         r = yt.videos().list(part="snippet,statistics,contentDetails,status", id=",".join(ids[i:i + 50])).execute()
+        quota.spend(quota.COSTS["list"], "list", proj)
         for v in r.get("items", []):
             sn, st = v.get("snippet", {}), v.get("statistics", {})
             dur = _iso_dur(v.get("contentDetails", {}).get("duration", ""))
@@ -197,6 +203,46 @@ def _iso_dur(s: str) -> float:
         return 0
     d, h, mi, se = (int(x or 0) for x in m.groups())
     return d * 86400 + h * 3600 + mi * 60 + se
+
+
+# ================================================================ preferências de publicação por canal
+
+PUBLISH_PREFS_PATH = MEDIA_DIR.parent / "channel_publish_prefs.json"
+PUBLISH_PREFS = {
+    "localize": True,  # título/descrição em inglês e espanhol (localizations) no envio
+    "captions": True,  # legendas oficiais (.srt) depois de publicar
+    "captions_langs": ["pt-BR", "en", "es"],
+    "captions_shorts": False,  # Shorts também? (400 unidades por idioma: 20 Shorts/dia estourariam a cota)
+    "phone_approval": True,  # botões Aprovar/Recusar no aviso do celular (ntfy)
+    "studio_checklist": True,  # checklist do YouTube Studio depois de publicar
+}
+
+
+def _all_publish_prefs() -> dict[str, Any]:
+    import json
+    try:
+        return json.loads(PUBLISH_PREFS_PATH.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def publish_prefs(channel_id: int | None) -> dict[str, Any]:
+    raw = _all_publish_prefs().get(str(channel_id)) or {} if channel_id else {}
+    out = {**PUBLISH_PREFS, **{k: v for k, v in raw.items() if k in PUBLISH_PREFS}}
+    out["captions_langs"] = [x for x in out.get("captions_langs") or [] if x in ("pt-BR", "en", "es")] or ["pt-BR"]
+    return out
+
+
+def set_publish_prefs(channel_id: int, patch: dict[str, Any]) -> dict[str, Any]:
+    import json
+    d = _all_publish_prefs()
+    cur = dict(d.get(str(channel_id)) or {})
+    for k, v in patch.items():
+        if k in PUBLISH_PREFS:
+            cur[k] = v if k == "captions_langs" else bool(v)
+    d[str(channel_id)] = cur
+    PUBLISH_PREFS_PATH.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+    return publish_prefs(channel_id)
 
 
 # ================================================================ identidade com IA

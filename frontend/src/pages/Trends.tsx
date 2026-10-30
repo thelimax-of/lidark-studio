@@ -1,6 +1,6 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { Radar, RefreshCw, Flame, Search, TrendingUp, Users, Globe2, Plus, Clapperboard, ExternalLink, Loader2 } from 'lucide-react'
+import { Radar, RefreshCw, Flame, Search, TrendingUp, Users, Globe2, Plus, Clapperboard, ExternalLink, Loader2, Zap } from 'lucide-react'
 import { api, invalidate, onJob, useApi, type Job } from '../api'
 import { act, ago, Empty, PageHeader, ScoreRing, SectionTitle, Skeleton, Status, fmtNum, useChannel } from '../ui'
 
@@ -111,6 +111,72 @@ export default function Trends() {
           </section>
         </div>
       )}
+      {cid && <OutliersCard cid={cid} />}
     </div>
+  )
+}
+
+// ---------------------------------------------------------------- radar de outliers (método "1 em 10")
+
+type Outlier = { id: string; lang: 'pt' | 'en'; title: string; channel: string; channel_avg: number; channel_subs: number; views: number
+  ratio: number; short: boolean; age_days: number; thumbnail: string; url: string
+  theme?: string; idea_title?: string; angle?: string; query_pt?: string
+  pt_coverage?: { query: string; best_views: number; covered: boolean; results: number } }
+type OutSnap = { at?: string; pt?: Outlier[]; en?: Outlier[]; gaps?: string[]; notes?: string[]; error?: string
+  min_ratio?: number; days?: number; running: boolean; age_hours: number | null }
+
+function OutliersCard({ cid }: { cid: number }) {
+  const { data } = useApi<OutSnap>(`/learning/outliers?channel_id=${cid}`, { refetchInterval: 20_000 })
+  const [tab, setTab] = useState<'pt' | 'en' | 'gaps'>('pt')
+  const refresh = () => act(() => api(`/learning/outliers?channel_id=${cid}&refresh=true`), 'Radar de outliers atualizando (2 buscas na API)')
+    .then(() => invalidate('/learning/outliers'))
+  const toIdea = (o: Outlier) => act(() => api('/learning/outliers/idea', { body: { channel_id: cid, video_id: o.id } }),
+    'Pauta criada com o TEMA (ângulo próprio, pesquisa própria) — a IA checa os fatos e dá nota').then(() => invalidate('/trends'))
+  const gaps = new Set(data?.gaps ?? [])
+  const list = tab === 'pt' ? data?.pt ?? [] : tab === 'en' ? data?.en ?? [] : (data?.en ?? []).filter(o => gaps.has(o.id))
+  return (
+    <section className="card overflow-hidden mt-4">
+      <SectionTitle hint={`Vídeos do nicho com views ≥ ${data?.min_ratio ?? 5}x a média do PRÓPRIO canal (últimos ${data?.days ?? 21} dias) — o tema puxou, não o tamanho do canal. Só números públicos; cada um vira um TEMA para adaptar com pesquisa própria, nunca cópia.${data?.at ? ` · atualizado ${ago(data.at)}` : ''}`}
+        action={<div className="flex items-center gap-2">
+          <div className="seg">
+            <button data-active={tab === 'pt'} onClick={() => setTab('pt')}>PT-BR ({data?.pt?.length ?? 0})</button>
+            <button data-active={tab === 'en'} onClick={() => setTab('en')}>EN ({data?.en?.length ?? 0})</button>
+            <button data-active={tab === 'gaps'} onClick={() => setTab('gaps')}>Lacunas ({gaps.size})</button>
+          </div>
+          <button className="btn btn-sm" disabled={data?.running} onClick={refresh}><RefreshCw size={14} className={clsx(data?.running && 'animate-spin')} /></button>
+        </div>}>
+        <span className="inline-flex items-center gap-2"><Zap size={15} className="text-warn" />Outliers do nicho</span>
+      </SectionTitle>
+      {data?.running && <div className="px-4 py-2 text-[12.5px] text-muted flex items-center gap-2 border-b border-line"><Loader2 size={13} className="animate-spin" /> Buscando outliers (PT e EN) e checando o que já existe em português…</div>}
+      {data?.error && <div className="px-4 py-2 text-[12.5px] text-warn">{data.error}</div>}
+      {!!data?.notes?.length && <div className="px-4 py-2 text-[12px] text-muted">{data.notes.join(' · ')}</div>}
+      {tab === 'gaps' && <div className="px-4 pt-3 text-[12px] text-muted">Temas em alta em inglês com pouca cobertura no YouTube brasileiro (busca em português sem vídeo com 100 mil+ views).</div>}
+      {!list.length ? <div className="p-6 text-[13px] text-muted text-center">{data?.at ? 'Nenhum outlier nesta lista.' : data?.running ? 'Primeira leitura em andamento…' : 'Ainda sem leitura.'}</div> : (
+        <ul className="divide-y divide-line">
+          {list.map(o => (
+            <li key={o.id} className="flex items-center gap-3 px-4 py-2.5">
+              {o.thumbnail ? <img src={o.thumbnail} alt="" referrerPolicy="no-referrer" className="w-24 h-[54px] rounded object-cover bg-panel2 shrink-0" />
+                : <div className="w-24 h-[54px] rounded bg-panel2 shrink-0" />}
+              <div className="min-w-0 flex-1">
+                <div className="text-[13px] font-medium line-clamp-1">{o.idea_title || o.theme || o.title}</div>
+                <div className="text-[11.5px] text-muted line-clamp-1">ref.: “{o.title}” · {o.channel}</div>
+                <div className="text-[11.5px] text-muted mt-0.5 flex flex-wrap gap-x-2">
+                  <span className="text-warn font-semibold num">{o.ratio.toFixed(1).replace('.', ',')}x a média</span>
+                  <span>{fmtNum(o.views)} views · canal faz ~{fmtNum(o.channel_avg)}</span>
+                  <span>{o.short ? 'Short' : 'longo'} · {Math.round(o.age_days)} dias</span>
+                  {o.pt_coverage && <span className={o.pt_coverage.covered ? 'text-faint' : 'text-ok'}>{o.pt_coverage.covered ? `já coberto em PT (${fmtNum(o.pt_coverage.best_views)})` : 'pouco coberto em PT'}</span>}
+                </div>
+                {o.angle && <div className="text-[11.5px] text-text/80 mt-0.5 line-clamp-1">Ângulo: {o.angle}</div>}
+              </div>
+              <div className="flex gap-1 shrink-0">
+                <a href={o.url} target="_blank" rel="noreferrer" className="btn btn-sm btn-icon btn-ghost" data-tip="Ver a referência"><ExternalLink size={14} /></a>
+                <button className="btn btn-sm" disabled={!o.idea_title && !o.theme} onClick={() => toIdea(o)}
+                  data-tip="Cria a pauta com o tema e um ângulo próprio — pesquisa própria, sem copiar título nem roteiro"><Plus size={14} /> Pauta</button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   )
 }

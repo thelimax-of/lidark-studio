@@ -233,6 +233,11 @@ def _load_records() -> tuple[list[dict[str, Any]], dict[int, str]]:
     """Um registro por vídeo publicado no YouTube: features + série de leituras (idade em horas, views...)."""
     now = _now()
     hooks = _hook_cache()
+    try:
+        from .retention import load_signals, signal_features
+        sigs = load_signals()
+    except Exception:  # noqa: BLE001
+        sigs, signal_features = {}, (lambda x: {})  # noqa: E731
     with session() as s:
         chans = {c.id: c.name for c in s.exec(select(Channel)).all()}
         pubs = s.exec(select(Publication).where(Publication.status == "published",
@@ -292,6 +297,7 @@ def _load_records() -> tuple[list[dict[str, Any]], dict[int, str]]:
                 "origin": (idea.origin if idea else "") or "", "idea_score": idea.score if idea else None,
                 "weekday": local.weekday(), "hour": local.hour,
                 "series": clean, "analytics": _analytics(last_an, clean, duration), "curve": curve,
+                "signals": signal_features(sigs.get(p.external_id)) if p.external_id else {},
             })
     return recs, chans
 
@@ -684,6 +690,19 @@ def _dims() -> dict[str, dict[str, Any]]:
     for k, d in out.items():
         d["options"] = opts.get(k, [])
         d["names"] = labels.get(k, {})
+    # dimensões novas do variety.py (ex.: tipo de abertura, loop) entram sozinhas
+    try:
+        from . import variety as _v
+        dyn_opts = _v.dimension_options() if hasattr(_v, "dimension_options") else {}
+        for k, d in (getattr(_v, "EXTRA_DIMENSIONS", {}) or {}).items():
+            if k not in out and callable(d.get("get")):
+                out[k] = {"label": d.get("label", k), "get": d["get"], "options": list(dyn_opts.get(k) or []),
+                          "names": dict(d.get("names") or {})}
+        for k, o in dyn_opts.items():
+            if k in out and not out[k]["options"]:
+                out[k]["options"] = list(o)
+    except Exception as e:  # noqa: BLE001
+        log.info("dimensões extras: %s", e)
     return out
 
 
@@ -884,7 +903,7 @@ def _slim(r: dict[str, Any]) -> dict[str, Any]:
     keep = ("pub_id", "video_id", "channel_id", "external_id", "title", "url", "thumbnail", "published_at", "age_h", "format",
             "duration", "imported", "hook", "thumbnail_text", "campaign", "origin", "idea_score", "weekday", "hour",
             "z", "rel", "views", "likes", "comments", "views_at", "like_rate", "comment_rate", "retention", "analytics",
-            "loo_pred")
+            "loo_pred", "signals")
     out = {k: r.get(k) for k in keep}
     out["variety"] = {k: v for k, v in (r.get("variety") or {}).items() if k != "avoid_openings"}
     out["series"] = [[round(a, 2), v] for a, v, *_ in r["series"]]
@@ -943,15 +962,30 @@ def _set_state(st: dict[str, Any]) -> None:
         _ctx_cache.clear()
 
 
+def _safe(fn):
+    try:
+        return fn()
+    except Exception as e:  # noqa: BLE001
+        log.info("aprendizado (parte opcional): %s", e)
+        return None
+
+
 def refresh(channel_id: int | None = None) -> dict[str, Any]:
-    """Recalcula tudo (o modelo é um só, compartilhado entre canais). Seguro chamar após cada coleta de métricas."""
+    """Recalcula tudo (o modelo é um só, compartilhado entre canais). Seguro chamar após cada coleta de métricas.
+    Antes: sinais de público do Analytics (cache, poucas consultas). Depois: diagnóstico "por que flopou" (48 h)."""
+    from . import retention as _ret
+    sig = _safe(_ret.collect_signals)
+    if sig and sig.get("videos"):
+        log.info("sinais de público: %s", sig)
     with _lock:
         st = _compute(fetch_hooks=True)
         _set_state(st)
     m = st.get("model") or {}
     recs = [r for r in st["records"] if channel_id is None or r["channel_id"] == channel_id]
-    return {"ok": True, "computed_at": st["computed_at"], "seconds": st["seconds"], "videos": len(recs),
-            "trained": m.get("n", 0), "loo": m.get("loo"), "verdict": m.get("verdict")}
+    from . import diagnose as _dg
+    diag = _safe(lambda: _dg.scan(notify_=True))
+    return {"ok": True, "signals": sig, "diagnosed": (diag or {}).get("notified"), "computed_at": st["computed_at"],
+            "seconds": st["seconds"], "videos": len(recs), "trained": m.get("n", 0), "loo": m.get("loo"), "verdict": m.get("verdict")}
 
 
 # ================================================================ API pública
@@ -1158,7 +1192,8 @@ def _lessons(st: dict[str, Any], cid: int | None, purposes: set[str] | None = No
     out = []
     dim_purpose = {"title_style": {"title", "ideas"}, "hook_style": {"hook", "script"}, "structure": {"script", "ideas"},
                    "duration": {"script"}, "graphics": {"script"}, "cta_style": {"script"}, "thumb_variant": {"thumbnail"},
-                   "caption": {"script"}, "intro": {"script", "hook"}, "outro": {"script"}, "grade": {"thumbnail", "script"}}
+                   "caption": {"script"}, "intro": {"script", "hook"}, "outro": {"script"}, "grade": {"thumbnail", "script"},
+                   "opening_type": {"hook", "script"}, "loop": {"script"}}
     for dim, d in (st.get("bandit") or {}).items():
         if purposes and not (dim_purpose.get(dim, set()) & purposes):
             continue
@@ -1273,6 +1308,13 @@ def _prompt_context(channel_id: int, purpose: str) -> str:
         rl = _retention_lines(st, channel_id)
         if rl:
             parts.append("GANCHOS × RETENÇÃO AOS 3 SEGUNDOS (curva real do YouTube):\n" + "\n".join(rl))
+    try:
+        sl = _signal_lines(st, channel_id, purpose)
+    except Exception as e:  # noqa: BLE001
+        log.info("sinais no prompt: %s", e)
+        sl = []
+    if sl:
+        parts.append("PÚBLICO MEDIDO (YouTube Analytics: origem, inscritos, aparelho, quem deslizou):\n" + "\n".join(sl))
     if m.get("ok"):
         r2 = (m.get("loo") or {}).get("r2", 0)
         if r2 < 0.03:
@@ -1327,6 +1369,7 @@ def report(channel_id: int | None = None) -> dict[str, Any]:
                   for c, g in zip(curve.get("centers", []), curve.get("g", []))],
         "curve_support": curve.get("support"),
         "topics": (st.get("topics") or {}).get(channel_id) if channel_id else None,
+        "audience": _safe(lambda: audience_signals(st, channel_id)),
         "method": [
             "Views comparadas na mesma idade: curva típica de crescimento por chain-ladder (cada vídeo comparado com ele mesmo).",
             "Efeito de cada canal com encolhimento bayesiano (canais com poucos vídeos puxam para a média geral).",
@@ -1334,3 +1377,216 @@ def report(channel_id: int | None = None) -> dict[str, Any]:
             "Previsão: ridge bayesiano com validação leave-one-out aninhada — a acurácia mostrada é fora da amostra.",
         ],
     }
+
+
+# ================================================================ sinais de público (origem, inscritos, aparelho)
+
+SIGNAL_DIMS = ("opening_type", "hook_style", "loop", "intro", "duration", "structure")
+SHRINK_K = 3.0  # "vídeos fantasmas" na média do canal (encolhe opções com poucos vídeos)
+
+
+def _er(r: dict[str, Any]) -> float | None:
+    """Views engajadas ÷ views: do Analytics por origem (mesma base, mais exato) ou a estimativa da leitura."""
+    sg = r.get("signals") or {}
+    if sg.get("engaged_ratio_an") is not None and (sg.get("views_an") or 0) >= 30:
+        return float(sg["engaged_ratio_an"])
+    v = (r.get("analytics") or {}).get("engaged_ratio")
+    return None if v is None else float(v)
+
+
+def _shrunk(vals: list[float], prior: float, k: float = SHRINK_K) -> float:
+    return (sum(vals) + k * prior) / (len(vals) + k)
+
+
+def _dim_value(dim: str, d: dict[str, Any], plan: dict[str, Any]) -> str | None:
+    try:
+        v = d["get"](plan) if plan else None
+    except Exception:  # noqa: BLE001
+        v = None
+    return None if v in (None, "") else str(v)
+
+
+def audience_signals(st: dict[str, Any], cid: int | None) -> dict[str, Any]:
+    """Onde cada formato ganha (origem do público, inscritos × novos, celular × TV) e, por opção de variedade, o efeito
+    em engajadas/views e na retenção aos 3s (o "deslizou ou ficou" do Short)."""
+    recs = [r for r in st.get("records") or [] if cid is None or r["channel_id"] == cid]
+    by_fmt: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for r in recs:
+        if (r.get("signals") or {}).get("views_an", 0) >= 20:
+            by_fmt[r.get("format") or "short"].append(r)
+    formats = []
+    for fmt, rs in by_fmt.items():
+        keys = sorted({k for r in rs for k in (r["signals"] or {}) if k.startswith("share_")})
+        row: dict[str, Any] = {"format": fmt, "videos": len(rs)}
+        for k in keys:
+            vals = [r["signals"][k] for r in rs if r["signals"].get(k) is not None]
+            if vals:
+                row[k] = round(sum(vals) / len(vals), 3)
+        ers = [x for x in (_er(r) for r in rs) if x is not None]
+        row["engaged_ratio"] = round(sum(ers) / len(ers), 3) if ers else None
+        # qual origem anda junto com vídeos acima do normal (rel > 0) — correlação de postos, só com amostra
+        wins = []
+        for k in keys:
+            pairs = [(r["signals"].get(k, 0.0), r["rel"]) for r in rs if r.get("rel") is not None]
+            if len(pairs) >= 6:
+                rho = _spearman(np.array([a for a, _ in pairs], float), np.array([b for _, b in pairs], float))
+                if rho is not None:
+                    wins.append({"key": k, "rho": round(rho, 2), "n": len(pairs)})
+        row["with_performance"] = sorted(wins, key=lambda x: -abs(x["rho"]))
+        formats.append(row)
+    # por dimensão de variedade: engajadas/views e retenção aos 3s, encolhidas para a média do canal
+    dims = _dims()
+    base_er = [x for x in (_er(r) for r in recs) if x is not None]
+    base_hook = [float((r.get("retention") or {}).get("hook")) for r in recs if (r.get("retention") or {}).get("hook")]
+    mer = sum(base_er) / len(base_er) if base_er else None
+    mhook = sum(base_hook) / len(base_hook) if base_hook else None
+    by_dim = []
+    for dim in SIGNAL_DIMS:
+        d = dims.get(dim)
+        if not d:
+            continue
+        acc: dict[str, dict[str, list[float]]] = defaultdict(lambda: {"er": [], "hook": [], "feed": []})
+        for r in recs:
+            v = _dim_value(dim, d, r.get("variety") or {})
+            if not v:
+                continue
+            e = _er(r)
+            if e is not None:
+                acc[v]["er"].append(e)
+            h = (r.get("retention") or {}).get("hook")
+            if h:
+                acc[v]["hook"].append(float(h))
+            fe = (r.get("signals") or {}).get("feed_engaged_ratio")
+            if fe is not None:
+                acc[v]["feed"].append(float(fe))
+        if not acc:
+            continue
+        opts = []
+        for o, a in acc.items():
+            opts.append({"key": o, "label": d["names"].get(o, o), "n_er": len(a["er"]), "n_hook": len(a["hook"]),
+                         "engaged_ratio": round(_shrunk(a["er"], mer), 3) if a["er"] and mer is not None else None,
+                         "engaged_raw": round(sum(a["er"]) / len(a["er"]), 3) if a["er"] else None,
+                         "hook_3s": round(_shrunk(a["hook"], mhook), 1) if a["hook"] and mhook is not None else None,
+                         "feed_engaged_ratio": round(sum(a["feed"]) / len(a["feed"]), 3) if a["feed"] else None})
+        opts.sort(key=lambda x: -(x["engaged_ratio"] or 0))
+        by_dim.append({"key": dim, "label": d["label"], "options": opts})
+    return {"formats": formats, "by_dimension": by_dim,
+            "channel_engaged_ratio": None if mer is None else round(mer, 3),
+            "channel_hook_3s": None if mhook is None else round(mhook, 1),
+            "videos_with_signals": sum(len(v) for v in by_fmt.values()),
+            "note": "Origem do público, inscritos e aparelho vêm do YouTube Analytics (atraso de ~2 dias). "
+                    "Espectadores novos × recorrentes não existem na API pública do Analytics."}
+
+
+def _signal_lines(st: dict[str, Any], cid: int, purpose: str) -> list[str]:
+    a = audience_signals(st, cid)
+    lines = []
+    for f in a["formats"]:
+        if f["videos"] < 3:
+            continue
+        nome = "Shorts" if f["format"] == "short" else "vídeos longos"
+        bits = [f"{GROUP_PT.get(k[6:], k[6:])} {round(v * 100)}%" for k, v in f.items()
+                if k.startswith("share_") and k[6:] in GROUP_PT and isinstance(v, float) and v >= 0.05]
+        if bits:
+            lines.append(f"- De onde vem o público dos {nome} ({f['videos']} vídeos): " + ", ".join(bits))
+        if purpose in ("ideas", "title") and f["format"] == "long" and (f.get("share_search") or 0) < 0.15:
+            lines.append("- Os longos quase não recebem busca: use no título o termo exato que o público digita.")
+        if f.get("share_tv", 0) >= 0.15 and f["format"] == "long":
+            lines.append(f"- {round(f['share_tv'] * 100)}% das views dos longos são na TV: imagens largas e texto grande.")
+    if purpose in ("hook", "script"):
+        for d in a["by_dimension"]:
+            if d["key"] not in ("opening_type", "loop", "hook_style"):
+                continue
+            ok = [o for o in d["options"] if o["n_er"] >= 2 and o["engaged_ratio"] is not None]
+            if len(ok) >= 2 and ok[0]["engaged_ratio"] - ok[-1]["engaged_ratio"] >= 0.04:
+                lines.append(f"- {d['label']}: “{ok[0]['label']}” fica mais (engajadas/views {round(ok[0]['engaged_ratio'] * 100)}%, "
+                             f"{ok[0]['n_er']} vídeos) que “{ok[-1]['label']}” ({round(ok[-1]['engaged_ratio'] * 100)}%, "
+                             f"{ok[-1]['n_er']} vídeos) — quanto menor, mais gente deslizou.")
+        try:
+            from .retention import cut_rule
+            cr = cut_rule(cid)
+            if cr:
+                lines.append("- " + cr)
+        except Exception as e:  # noqa: BLE001
+            log.info("regra de corte: %s", e)
+    return lines
+
+
+GROUP_PT = {"ads": "anúncios pagos", "feed": "feed do Shorts", "search": "busca", "suggested": "sugeridos", "browse": "inscritos/navegação",
+            "external": "externo/direto", "subscribed": "inscritos", "mobile": "celular", "tv": "TV", "desktop": "computador"}
+
+
+# ================================================================ engajadas ÷ views (painel)
+
+def engaged_panel(channel_id: int | None = None) -> dict[str, Any]:
+    """Views engajadas ÷ views por vídeo e por canal, com tendência semanal. Baixo = o YouTube mostrou, ninguém ficou."""
+    st = _get_state()
+    recs = [r for r in st.get("records") or [] if channel_id is None or r["channel_id"] == channel_id]
+    vids, weekly = [], defaultdict(list)
+    for r in sorted(recs, key=lambda r: r["published_at"], reverse=True):
+        e = _er(r)
+        if e is None:
+            continue
+        sg = r.get("signals") or {}
+        vids.append({"pub_id": r["pub_id"], "channel_id": r["channel_id"], "title": r["title"], "url": r["url"],
+                     "published_at": r["published_at"], "format": r["format"], "views": r["views"],
+                     "engaged_ratio": round(e, 3), "feed_engaged_ratio": sg.get("feed_engaged_ratio"),
+                     "source": "analytics" if sg.get("engaged_ratio_an") is not None else "estimativa",
+                     "opening_type": (r.get("variety") or {}).get("opening_type"),
+                     "x_normal": None if r.get("rel") is None else round(math.exp(r["rel"]), 2)})
+        d = datetime.fromisoformat(r["published_at"]).astimezone(TZ).date()
+        wk = (d - __import__("datetime").timedelta(days=d.weekday())).isoformat()
+        weekly[(r["channel_id"], r["format"], wk)].append(e)
+    chans = []
+    for cid, name in sorted((st.get("channels") or {}).items()):
+        if channel_id is not None and cid != channel_id:
+            continue
+        for fmt in ("short", "long"):
+            rows = [v for v in vids if v["channel_id"] == cid and v["format"] == fmt]
+            if not rows:
+                continue
+            wk = sorted((w, vals) for (c, f, w), vals in weekly.items() if c == cid and f == fmt)
+            trend = [{"week": w, "engaged_ratio": round(sum(v) / len(v), 3), "videos": len(v)} for w, v in wk][-12:]
+            last, prev = rows[:5], rows[5:15]
+            m_last = sum(v["engaged_ratio"] for v in last) / len(last)
+            m_prev = sum(v["engaged_ratio"] for v in prev) / len(prev) if prev else None
+            chans.append({"channel_id": cid, "name": name, "format": fmt, "videos": len(rows),
+                          "engaged_ratio": round(sum(v["engaged_ratio"] for v in rows) / len(rows), 3),
+                          "last5": round(m_last, 3), "prev10": None if m_prev is None else round(m_prev, 3),
+                          "delta": None if m_prev is None else round(m_last - m_prev, 3), "trend": trend})
+    return {"channels": chans, "videos": vids[:80],
+            "help": "Engajadas ÷ views: das pessoas a quem o YouTube mostrou o vídeo, quantas ficaram (não deslizaram). "
+                    "É o número que conta para a receita dos Shorts."}
+
+
+# ================================================================ comparação na mesma idade (gráfico)
+
+def age_compare(channel_id: int, n: int = 8, max_age_h: float = 336) -> dict[str, Any]:
+    """Cada vídeo recente × a curva mediana do canal na MESMA idade (com faixa típica de 50% dos vídeos)."""
+    st = _get_state()
+    curve = st.get("curve") or {}
+    if not curve.get("g"):
+        return {"curve": [], "videos": []}
+    mu = st.get("channel_effect", {}).get(channel_id, st.get("grand", 0.0))
+    sd = math.sqrt(max(0.05, float(st.get("within_var") or 0.3)))
+    med = [{"age_h": c, "views": round(math.expm1(g + mu)), "p25": round(max(0.0, math.expm1(g + mu - 0.674 * sd))),
+            "p75": round(math.expm1(g + mu + 0.674 * sd))}
+           for c, g in zip(curve["centers"], curve["g"]) if c <= max_age_h]
+    recs = [r for r in st.get("records") or [] if r["channel_id"] == channel_id and r.get("series")]
+    recs.sort(key=lambda r: r["published_at"], reverse=True)
+    vids = []
+    for r in recs[:n]:
+        pts = [[a, v] for a, v in r["series"] if 0.5 <= a <= max_age_h]
+        if len(pts) > 40:  # afina a série (o gráfico não precisa de toda leitura)
+            step = len(pts) / 40
+            pts = [pts[int(i * step)] for i in range(40)] + [pts[-1]]
+        # 3º valor: x o normal do canal NA MESMA IDADE (1 = típico)
+        pts = [[round(a, 2), v, round((v + 1) / (math.expm1(_g(curve, a) + mu) + 1), 3)] for a, v in pts]
+        last = pts[-1] if pts else None
+        exp_ = math.expm1(_g(curve, last[0]) + mu) if last else None
+        vids.append({"pub_id": r["pub_id"], "title": r["title"], "url": r["url"], "format": r["format"],
+                     "age_h": round(r["age_h"], 1), "points": pts,
+                     "x_now": round((last[1] + 1) / (exp_ + 1), 2) if last and exp_ is not None else None})
+    return {"channel_id": channel_id, "curve": med, "videos": vids,
+            "help": "Linha cinza = vídeo típico do canal em cada idade (faixa = metade dos vídeos). Acima dela, o vídeo "
+                    "está melhor que o normal do canal na mesma idade."}

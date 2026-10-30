@@ -42,9 +42,9 @@ DIMENSIONS: dict[str, tuple[str, Callable[[dict], Any]]] = {
 }
 
 LABELS: dict[str, dict[str, str]] = {
-    "hook_style": {"pergunta": "Pergunta", "numero": "Número chocante", "contraintuitivo": "Contraintuitivo",
+    "hook_style": {"correcao": "Correção de mito", "pergunta": "Pergunta", "numero": "Número chocante", "contraintuitivo": "Contraintuitivo",
                    "cena": "Cena narrada", "desafio": "Desafio", "consequencia": "Consequência primeiro"},
-    "title_style": {"pergunta": "Pergunta", "afirmacao": "Afirmação", "numero": "Número", "o_dia": "“O dia em que”",
+    "title_style": {"lacuna": "Lacuna", "busca": "Pergunta de busca", "pergunta": "Pergunta", "afirmacao": "Afirmação", "numero": "Número", "o_dia": "“O dia em que”",
                     "nome": "Nome + revelação", "contraste": "Contraste"},
     "graphics": {"poucas": "Poucos gráficos", "médias": "Gráficos médios", "muitas": "Muitos gráficos"},
     "grade": {"neutro": "Neutro", "quente": "Quente", "frio": "Frio", "contraste": "Contraste", "sepia": "Sépia", "filme": "Filme"},

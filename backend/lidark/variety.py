@@ -81,6 +81,15 @@ STRUCTURES: dict[str, dict[str, Any]] = {
         "how": "Parta de uma pergunta 'e se...' sobre um momento decisivo, mas responda SÓ com fatos reais: o que quase aconteceu, o que de fato aconteceu e as consequências documentadas. Nada inventado.",
         "graphics": "Use 'timeline' para o que de fato aconteceu. NÃO use 'versus'.",
     },
+    "biografia": {
+        "mood": "emotional cinematic", "series": "Vidas em 3 Atos",
+        "name": "Vida em 3 atos", "formats": ("long",),
+        "how": "Conte a vida de UMA pessoa real como um filme em 3 atos: (1) quem ela era e o que queria/o que a ameaçava; "
+               "(2) a escalada — decisões, conflitos e a grande virada; (3) o desfecho e o legado (o que mudou por causa dela). "
+               "Cada CAPÍTULO termina num cliffhanger real (uma decisão no ar, uma ameaça, uma pergunta que o capítulo seguinte "
+               "responde). Mostre a pessoa com nome, idade, lugar e motivação; nada de biografia em lista de datas.",
+        "graphics": "Use 'dossier' para apresentar a pessoa, 'timeline' na virada de cada ato e 'quote' só com frase real dela. NÃO use 'versus'.",
+    },
 }
 
 HOOKS = {
@@ -92,7 +101,12 @@ HOOKS = {
     "consequencia": "a consequência surpreendente primeiro, a causa depois (o espectador fica para saber o porquê)",
     "segredo": "algo escondido, esquecido ou proibido revelado (ex.: 'isso ficou fora dos livros por 50 anos') — só se for verdade",
     "stakes": "o que estava em jogo, em uma frase concreta (vidas, um país, um recorde, uma fortuna), antes de qualquer contexto",
+    "correcao": "a correção de algo que a escola/o senso comum ensina errado (ex.: 'a escola te ensinou errado: ...'), com a "
+                "verdade logo em seguida. SÓ vale se a crença for mesmo comum E as fontes mostrarem a verdade (cada frase será "
+                "checada nas fontes); se o tema não tiver um equívoco real, use o estilo 'contraintuitivo' e informe em "
+                "\"hook_style_used\"",
 }
+MYTH_HOOK = "correcao"  # gancho de correção de mito: passa pela checagem frase a frase (content.check_claims)
 
 TITLES = {
     "pergunta": "pergunta curta e intrigante, com um elemento concreto (nome, lugar ou número)",
@@ -102,7 +116,26 @@ TITLES = {
     "nome": "começa com o nome do personagem/lugar seguido de uma revelação",
     "contraste": "contraste entre duas ideias (ex.: 'Era X, virou Y')",
     "lacuna": "afirmação que esconde a peça-chave (ex.: 'O detalhe que derrubou o Império'), revelada só no vídeo",
+    "busca": "no formato que as pessoas DIGITAM na busca, com o termo pesquisado no começo: 'O que foi X?', 'Por que X "
+             "aconteceu?' ou 'X: resumo ...' (ex.: 'O que foi a Revolta da Vacina? Resumo para o ENEM') — sem perder a "
+             "especificidade",
 }
+TITLE_FORMATS: dict[str, tuple[str, ...]] = {"busca": ("long",)}  # padrões só de um formato (o resto vale para os dois)
+
+# ---------------------------------------------------------------- abertura do Short (os 2 primeiros segundos)
+# A 1ª distribuição do Short depende de "assistiu × deslizou": testamos 3 tipos de abertura, medidos pelo aprendizado.
+OPENING_TYPES: dict[str, dict[str, str]] = {
+    "impact": {"name": "Frase de impacto",
+               "how": "a 1ª frase falada é um soco — o fato/dado mais forte do vídeo, sem contexto; na tela só a legenda "
+                      "(\"onscreen\" vazio)"},
+    "question": {"name": "Pergunta na tela",
+                 "how": "uma PERGUNTA curta e específica aparece ESCRITA na tela (\"onscreen\", até 7 palavras) junto com a "
+                        "1ª frase falada; quem lê precisa ficar para saber a resposta"},
+    "motion": {"name": "Movimento visual",
+               "how": "os 2 primeiros segundos são um MOVIMENTO visual forte descrito em \"motion\" (zoom rápido num detalhe, "
+                      "algo caindo/girando/explodindo, revelação de uma imagem) e a fala começa curta, colada na ação"},
+}
+LOOP_SHARE = 0.4  # fração dos Shorts com loop perfeito (a última frase emenda na primeira); nunca todos
 
 NEXT_CTA = "1"  # estilo que anuncia o próximo vídeo: só com uma pauta real da fila
 
@@ -176,17 +209,22 @@ def series_names(ch: Channel) -> dict[str, str]:
     if all(k in names for k in STRUCTURES):
         return names
     defaults = {k: v["series"] for k, v in STRUCTURES.items()}
-    try:
-        from . import llm
-        data = llm.complete_json(
-            f"Canal do YouTube: {ch.name} — nicho: {ch.niche}. Para cada formato abaixo, crie o nome de uma SÉRIE/playlist "
-            f"curta (2-4 palavras, em {ch.language or 'português'}), chamativa e coerente com o nicho.\n"
-            + "\n".join(f"- {k}: {v['name']} (ex.: {v['series']})" for k, v in STRUCTURES.items())
-            + '\nResponda JSON: {"series": {"mito_verdade": "...", ...}}', temperature=0.6)
-        got = data.get("series", {}) if isinstance(data, dict) else {}
-        names = {k: str(got.get(k) or defaults[k])[:40] for k in STRUCTURES}
-    except Exception:  # noqa: BLE001
-        names = defaults
+    if names:
+        # estrutura nova no código: completa só ela com o nome padrão (sem gastar cota) — renomear as séries que já
+        # existem quebraria a ligação série → playlist (Channel.playlists) e a maratona entre episódios
+        names = {**{k: defaults[k] for k in STRUCTURES if k not in names}, **names}
+    else:
+        try:
+            from . import llm
+            data = llm.complete_json(
+                f"Canal do YouTube: {ch.name} — nicho: {ch.niche}. Para cada formato abaixo, crie o nome de uma SÉRIE/playlist "
+                f"curta (2-4 palavras, em {ch.language or 'português'}), chamativa e coerente com o nicho.\n"
+                + "\n".join(f"- {k}: {v['name']} (ex.: {v['series']})" for k, v in STRUCTURES.items())
+                + '\nResponda JSON: {"series": {"mito_verdade": "...", ...}}', temperature=0.6)
+            got = data.get("series", {}) if isinstance(data, dict) else {}
+            names = {k: str(got.get(k) or defaults[k])[:40] for k in STRUCTURES}
+        except Exception:  # noqa: BLE001
+            names = defaults
     from .db import session as _s
     with _s() as s:
         db = s.get(Channel, ch.id)
@@ -235,6 +273,59 @@ def _pick(options: list[str], recent: list[str], avoid_last: int, weights: dict[
         bonus = 1.0 + max(-0.5, min(1.0, ((weights or {}).get(o, 50) - 50) / 50))
         return (1 + age) * bonus
     return rng.choices(pool, weights=[w(o) for o in pool])[0]
+
+
+# ---------------------------------------------------------------- freio de segurança do YPP
+# Política de "conteúdo inautêntico" (jul/2025): canal em que os vídeos saem do mesmo molde perde a monetização.
+# Se uma escolha já ocupa 30% dos últimos 10 roteiros do canal, ela sai do sorteio até o histórico se espalhar.
+YPP_WINDOW = 10
+YPP_MAX_SHARE = 0.3
+
+
+def _brake(options: list[str], recent: list[str]) -> list[str]:
+    """Tira do sorteio as opções que, escolhidas de novo, passariam de 30% dos últimos 10 roteiros."""
+    window = [r for r in recent[:YPP_WINDOW - 1] if r]
+    if len(window) < 4:
+        return options
+    cap = YPP_MAX_SHARE * (len(window) + 1)
+    ok = [o for o in options if window.count(o) + 1 <= cap]
+    return ok or options
+
+
+def _pick_loop(hist: list[dict[str, Any]], w: dict[str, float] | None, rng: random.Random) -> bool:
+    """Loop perfeito em ~40% dos Shorts: o aprendizado inclina (25-55%), mas nunca vira regra — e não sai 3 seguidos."""
+    prev = [bool(h.get("loop")) for h in hist if "loop" in h][:5]
+    p = LOOP_SHARE
+    if w:
+        try:
+            ratio = (float(w.get("sim", 50)) + 1) / (float(w.get("nao", 50)) + 1)
+            p *= max(0.6, min(1.4, ratio))
+        except (TypeError, ValueError):
+            pass
+    p = max(0.25, min(0.55, p))
+    if len(prev) >= 2 and prev[0] and prev[1]:
+        p = 0.1
+    elif len(prev) >= 4 and not any(prev[:4]):
+        p = 0.7
+    return rng.random() < p
+
+
+def dimension_options() -> dict[str, list[str]]:
+    """Opções de cada dimensão sorteada aqui (o aprendizado lê esta lista; dimensão nova entra sozinha)."""
+    return {"structure": list(STRUCTURES), "hook_style": list(HOOKS), "title_style": list(TITLES),
+            "cta_style": [str(i) for i in range(len(CTA_STYLES))], "graphics": [d[0] for d in GRAPHIC_DOSES],
+            "duration": list(DURATION_BANDS), "grade": LOOK_OPTIONS["grade"], "caption": LOOK_OPTIONS["caption"],
+            "intro": LOOK_OPTIONS["intro"], "outro": LOOK_OPTIONS["outro"], "thumb_variant": [str(i) for i in range(8)],
+            "opening_type": list(OPENING_TYPES), "loop": ["sim", "nao"]}
+
+
+# dimensões novas (além das de growth.DIMENSIONS): rótulo, nomes das opções e como ler do Script.variety
+EXTRA_DIMENSIONS: dict[str, dict[str, Any]] = {
+    "opening_type": {"label": "Abertura do Short (2 s)", "names": {k: v["name"] for k, v in OPENING_TYPES.items()},
+                     "get": lambda p: p.get("opening_type")},
+    "loop": {"label": "Loop perfeito", "names": {"sim": "Com loop", "nao": "Sem loop"},
+             "get": lambda p: None if "loop" not in p else ("sim" if p.get("loop") else "nao")},
+}
 
 
 def _blend(a: dict[str, float] | None, b: dict[str, float] | None, wb: float = 0.5) -> dict[str, float]:
@@ -320,13 +411,17 @@ def _plan(ch: Channel, fmt: str, pending: list[dict[str, Any]]) -> dict[str, Any
     dw = dimension_weights_blend(ch.id)  # o que já se provou melhor (experimentos + aprendizado com dados)
     perf = _blend(structure_performance(ch.id), dw.get("structure"))
     structs = [k for k, v in STRUCTURES.items() if fmt in v["formats"]]
-    structure = _pick(structs, [h.get("structure", "") for h in hist], 3, perf, rng)
-    hook = _pick(list(HOOKS), [h.get("hook_style", "") for h in hist], 2, dw.get("hook_style"), rng)
+    # freio do YPP: estrutura/gancho/título que já passam de 30% dos últimos 10 roteiros ficam de fora do sorteio
+    rec_st = [h.get("structure", "") for h in hist]
+    structure = _pick(_brake(structs, rec_st), rec_st, 3, perf, rng)
+    rec_hook = [h.get("hook_style", "") for h in hist]
+    hook = _pick(_brake(list(HOOKS), rec_hook), rec_hook, 2, dw.get("hook_style"), rng)
     # título: evita o esquema mais usado ultimamente (ex.: tudo em pergunta)
     recent_titles = [h["title"] for h in hist if h.get("title")]
     q_share = sum(t.strip().rstrip("#Shorts").strip().endswith("?") for t in recent_titles[:6]) / max(1, len(recent_titles[:6]))
-    title_opts = [t for t in TITLES if not (t == "pergunta" and q_share >= 0.5)]
-    title = _pick(title_opts, [h.get("title_style", "") for h in hist], 2, dw.get("title_style"), rng)
+    title_opts = [t for t in TITLES if not (t == "pergunta" and q_share >= 0.5) and fmt in TITLE_FORMATS.get(t, (fmt,))]
+    rec_title = [h.get("title_style", "") for h in hist]
+    title = _pick(_brake(title_opts, rec_title), rec_title, 2, dw.get("title_style"), rng)
     cta = _pick([str(i) for i in range(len(CTA_STYLES))], [h.get("cta_style", "") for h in hist], 2, dw.get("cta_style"), rng)
     dose = _pick([d[0] for d in GRAPHIC_DOSES], [h.get("graphics", "") for h in hist], 1, dw.get("graphics"), rng)
     out: dict[str, Any] = {"structure": structure, "hook_style": hook, "title_style": title, "cta_style": cta, "graphics": dose}
@@ -338,6 +433,12 @@ def _plan(ch: Channel, fmt: str, pending: list[dict[str, Any]]) -> dict[str, Any
                          0, {**DURATION_PRIOR, **(dw.get("duration") or {})}, rng)
             out["seconds"] = rng.randint(*DURATION_BANDS[band])
         out["duration"] = duration_band(out["seconds"])
+        # abertura dos 2 primeiros segundos: o roteirista escreve as 3 e o vídeo usa a sorteada (o aprendizado mede
+        # quanto cada tipo segura o "assistiu × deslizou")
+        shorts_hist = [h for h in hist if h.get("duration") or h.get("opening_type")]
+        out["opening_type"] = _pick(list(OPENING_TYPES), [h.get("opening_type", "") for h in shorts_hist], 1,
+                                    dw.get("opening_type"), rng)
+        out["loop"] = _pick_loop(shorts_hist, dw.get("loop"), rng)
     try:  # variação leve de ritmo da voz (±3%), imperceptível como mudança de voz
         cur = int((ch.voice_rate or "+0%").strip().rstrip("%"))
         out["voice_rate"] = f"{cur + rng.choice([-3, -2, 0, 0, 2, 3]):+d}%"
@@ -376,9 +477,14 @@ def prompt_block(ch: Channel, p: dict[str, Any], fmt: str) -> str:
             cta_style = CTA_STYLES[0]  # sem pauta confirmada na fila: não promete nada
     chapters = ("" if fmt == "short" else """
 - CAPÍTULOS: organize o vídeo em 5 a 8 blocos. A PRIMEIRA cena de cada bloco ganha o campo "chapter" com o título do
-  capítulo (2-5 palavras, sem número). A cena 1 também tem "chapter". Cada bloco deve ter pelo menos 3 cenas.
+  capítulo (2-5 palavras, sem número, com um termo que alguém pesquisaria). A cena 1 também tem "chapter". Cada bloco
+  deve ter pelo menos 3 cenas.
 - TELA FINAL: depois do CTA o vídeo mostra 20 s de tela final com "assista o próximo" e o botão de inscrição; o CTA
   pode apontar para ela (ex.: "o próximo vídeo está aqui na tela"), sem anunciar um tema que não foi indicado acima.""")
+    if fmt == "long":
+        chapters += "\n" + episode_block(p)
+    else:
+        chapters += "\n" + opening_block(p) + "\n" + loop_block(p)
     return f"""VARIEDADE (OBRIGATÓRIO — o canal não pode parecer feito em série):
 - ESTRUTURA NARRATIVA DESTE VÍDEO: "{st['name']}". {st['how']} {st['graphics']}
   Adapte a estrutura ao tema (ex.: numa pauta de ciência, "cronologia" = a sequência do que acontece, segundo a segundo);
@@ -394,6 +500,40 @@ ABERTURAS RECENTES (o gancho novo não pode começar igual nem repetir o mesmo t
 {hooks_open}
 DESCRIÇÕES RECENTES (a nova deve começar diferente e ser escrita do zero):
 {desc_open}"""
+
+
+def opening_block(p: dict[str, Any]) -> str:
+    """Pedido das 3 aberturas do Short (uma de cada tipo) e qual delas o vídeo usa."""
+    cur = p.get("opening_type") if p.get("opening_type") in OPENING_TYPES else "impact"
+    kinds = "\n".join(f"    * \"{k}\" ({v['name']}): {v['how']}" for k, v in OPENING_TYPES.items())
+    return f"""- ABERTURA (os 2 primeiros segundos decidem "assistiu × deslizou"): escreva em "opening_options" 3 aberturas
+  bem diferentes, UMA de cada tipo:
+{kinds}
+  Cada uma com "text" (a 1ª frase falada, até 12 palavras, verdadeira), "onscreen" (texto na tela, pode ser vazio) e
+  "motion" (o movimento visual dos 2 s, pode ser vazio). ESTE vídeo usa a do tipo "{cur}": a cena 1 começa EXATAMENTE
+  com o "text" dela, e o "visual" da cena 1 combina com o "motion"/"onscreen" dela."""
+
+
+def loop_block(p: dict[str, Any]) -> str:
+    if p.get("loop"):
+        return """- LOOP PERFEITO (este Short emenda o fim no começo): o CTA curto fica no fim da PENÚLTIMA cena. A ÚLTIMA cena
+  (marque "loop": true nela) tem UMA frase curta que fica em aberto e se completa com a 1ª frase do vídeo — ao
+  recomeçar, a emenda soa como uma frase só (ex.: última "E tudo isso aconteceu porque" → primeira "ninguém sabe como
+  era o rosto de Tiradentes."). Sem CTA, sem reticências e sem pausa na última cena; a emenda precisa ser natural."""
+    return """- FECHAMENTO: termine no payoff e no CTA (este Short NÃO é em loop: não force eco da 1ª frase no final)."""
+
+
+def episode_block(p: dict[str, Any]) -> str:
+    """Vídeo longo maratonável: o fim puxa o próximo episódio da série (só com pauta real da fila)."""
+    series = p.get("series") or "do canal"
+    if p.get("next_episode") and p.get("next_title"):
+        return (f"- FIM DE EPISÓDIO (série maratonável \"{series}\"): antes do CTA, feche com um gancho para o PRÓXIMO "
+                f"EPISÓDIO da série, que será sobre \"{p['next_title']}\" — uma pergunta ou cena em aberto desse tema que dê "
+                "vontade de emendar, com palavras novas (nada de \"no próximo vídeo...\" genérico). NUNCA invente outro tema.\n"
+                f"- DESCRIÇÃO: diga que o vídeo é um episódio da série \"{series}\" e convide a maratonar a playlist.")
+    return (f"- FIM DE EPISÓDIO (série \"{series}\"): o último capítulo fecha a história e convida a continuar na série "
+            "(\"tem mais episódios na tela final\"), sem prometer um tema específico.\n"
+            f"- DESCRIÇÃO: diga que o vídeo é um episódio da série \"{series}\".")
 
 
 def label(p: dict[str, Any] | None) -> str:
@@ -486,10 +626,87 @@ def report(ch: Channel, n: int = 20) -> dict[str, Any]:
              spread(dist("grade", src=looks), len(looks), len(LOOK_OPTIONS["grade"])),
              1 - max(0.0, q_share - 0.3)]
     score = round(100 * sum(parts) / len(parts)) if planned else None
+    try:
+        risk = ypp_risk(ch.id)
+    except Exception:  # noqa: BLE001
+        risk = {"risk": "ok", "reasons": []}
     return {
+        "ypp_risk": risk,
         "total": len(rows), "planned": len(planned), "score": score, "warnings": warnings,
         "structures": structs, "hooks": dist("hook_style"), "titles": dist("title_style"),
         "grades": dist("grade", src=looks), "captions": dist("caption", src=looks),
         "series": dist("series"), "question_share": round(q_share * 100),
         "durations": [p.get("seconds") for p in planned if p.get("seconds")],
     }
+
+
+# ---------------------------------------------------------------- risco de "conteúdo inautêntico" (YPP)
+
+_RISK_DIMS = (("structure", "a mesma estrutura narrativa", YPP_MAX_SHARE),
+              ("hook_style", "o mesmo tipo de gancho", YPP_MAX_SHARE),
+              ("title_style", "o mesmo padrão de título", YPP_MAX_SHARE),
+              ("opening_type", "o mesmo tipo de abertura", 0.6))
+
+
+def _option_name(dim: str, key: str) -> str:
+    if dim == "structure":
+        return STRUCTURES.get(key, {}).get("name", key)
+    if dim == "opening_type":
+        return OPENING_TYPES.get(key, {}).get("name", key)
+    return key
+
+
+def ypp_risk(channel_id: int) -> dict[str, Any]:
+    """Os últimos 10 roteiros do canal parecem feitos em série? {"risk": "ok|atencao|alto", "reasons": [...]}.
+
+    Mede o que a política de conteúdo inautêntico do YouTube olha: o mesmo molde (estrutura, gancho, título, abertura)
+    repetido, títulos que começam igual ou quase iguais. O sorteio (plan) já freia isso; aqui é o alarme do painel."""
+    with session() as s:
+        rows = s.exec(select(Script).where(Script.channel_id == channel_id).order_by(Script.id.desc())
+                      .limit(YPP_WINDOW)).all()
+    plans = [r.variety or {} for r in rows]
+    reasons: list[str] = []
+    level = 0
+    for dim, lab, cap in _RISK_DIMS:
+        vals = [str(p.get(dim)) for p in plans if p.get(dim) not in (None, "")]
+        if len(vals) < 5:
+            continue
+        top = max(set(vals), key=vals.count)
+        share = vals.count(top) / len(vals)
+        if share > cap:
+            reasons.append(f"{vals.count(top)} dos últimos {len(vals)} roteiros com {lab} "
+                           f"({_option_name(dim, top)})")
+            level += 2 if share >= max(0.5, cap + 0.2) else 1
+    titles = [r.title.replace("#Shorts", "").strip() for r in rows if r.title]
+    if len(titles) >= 5:
+        op: dict[str, int] = defaultdict(int)
+        for t in titles:
+            k = _opening(t)
+            if k:
+                op[k] += 1
+        for k, n in op.items():
+            if n / len(titles) > YPP_MAX_SHARE:
+                reasons.append(f"{n} dos últimos {len(titles)} títulos começam com “{k}”")
+                level += 1
+        toks = [set(_tokens(t)) for t in titles]
+        twins = sum(1 for i in range(len(toks)) for j in range(i + 1, len(toks)) if toks[i] and _jaccard(toks[i], toks[j]) >= 0.5)
+        if twins >= 2:
+            reasons.append(f"{twins} pares de títulos quase iguais entre os últimos {len(titles)}")
+            level += 1
+    loops = [bool(p.get("loop")) for p in plans if "loop" in p]
+    if len(loops) >= 5 and sum(loops) / len(loops) > 0.7:
+        reasons.append(f"{sum(loops)} dos últimos {len(loops)} Shorts em loop (o loop deve ser exceção)")
+        level += 1
+    risk = "alto" if level >= 3 else "atencao" if level >= 1 else "ok"
+    return {"risk": risk, "reasons": reasons, "window": len(rows)}
+
+
+def overused(channel_id: int, dim: str, extra: list[dict[str, Any]] | None = None) -> set[str]:
+    """Opções da dimensão que já passaram do limite de 30% nos últimos roteiros (para quem troca a escolha depois do
+    sorteio, como o laboratório de gancho)."""
+    vals = [str(h.get(dim) or "") for h in (extra or []) + recent_plans(channel_id, YPP_WINDOW)]
+    window = [v for v in vals[:YPP_WINDOW - 1] if v]
+    if len(window) < 4:
+        return set()
+    cap = YPP_MAX_SHARE * (len(window) + 1)
+    return {v for v in set(window) if window.count(v) + 1 > cap}

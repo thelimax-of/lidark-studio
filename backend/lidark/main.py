@@ -60,6 +60,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)  # SSE, v
 app.include_router(router)
 app.include_router(__import__("lidark.api_growth", fromlist=["router"]).router)  # sino, viral, tendências, miniaturas, piloto
 app.include_router(__import__("lidark.api_learning", fromlist=["router"]).router)  # aprendizado (o que o sistema aprendeu)
+app.include_router(__import__("lidark.api_publish2", fromlist=["router"]).router)  # cota YouTube, idiomas, legendas, checklist, aprovação
 app.mount("/media", StaticFiles(directory=MEDIA_DIR), name="media")
 app.mount("/fonts", StaticFiles(directory=FONTS_DIR), name="fonts")
 

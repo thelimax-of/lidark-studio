@@ -2,10 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { Area, AreaChart, CartesianGrid, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { BarChart3, Sparkles, ExternalLink, ArrowUpDown, RefreshCw, Film, Activity } from 'lucide-react'
 import { api, invalidate, onJob, useApi, type Job } from '../api'
-import { act, ChannelScope, ChannelTag, Empty, fmtNum, PageHeader, SectionTitle, Skeleton, toast, useChannel, useScope } from '../ui'
-import { Bar, ChartDefs, ChartTip, RowsSkeleton, StatTile, chart, useProgressive } from './kit'
+import { act, ChannelScope, ChannelTag, Empty, fmtNum, PageHeader, SectionTitle, Skeleton, Sparkline, toast, useChannel, useScope } from '../ui'
+import { Bar, Callout, ChartDefs, ChartTip, RowsSkeleton, StatTile, chart, useProgressive } from './kit'
 import { ExperimentsCard, YppCard } from './Growth'
-import { dayLabel, dm, estRange, type Overview } from './Overview'
+import { AgeCompareCard, dayLabel, dm, estRange, type Overview } from './Overview'
 import { ChampionsCard, toLong } from './Champions'
 
 type Row = {
@@ -101,6 +101,12 @@ export default function Metrics() {
       </section>
 
       {!all && <div className="space-y-5 mb-5"><YppCard channelId={channel.id} /><ExperimentsCard channelId={channel.id} /></div>}
+
+      <EngagedCard cid={cid} />
+
+      <DiagnoseCard cid={cid} />
+
+      {cid && <div className="mb-5"><AgeCompareCard channelId={cid} /></div>}
 
       {cid && <RetentionCard cid={cid} />}
 
@@ -235,6 +241,7 @@ function RetentionCard({ cid }: { cid: number }) {
           </AreaChart>
         </ResponsiveContainer>
       </div>
+      <CutHeatmap cid={cid} />
       <div className="mt-4 pt-4 border-t border-line">
         <div className="text-sm font-semibold">Regras automáticas para o roteirista</div>
         <div className="text-xs text-muted mb-2">Calculadas das quedas por cena (tipo de visual, posição, tamanho) — entram no prompt junto com as lições da IA</div>
@@ -242,6 +249,152 @@ function RetentionCard({ cid }: { cid: number }) {
           ? <ul className="space-y-1.5 text-sm text-text/85">{rules.rules.map((t, k) => <li key={k} className="flex gap-2.5"><span className="w-1.5 h-1.5 rounded-full bg-accent2 mt-2 shrink-0" /><span>{t}</span></li>)}</ul>
           : <p className="text-sm text-muted">{rules?.status || 'Ainda sem dados suficientes.'}</p>}
       </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------- engajadas ÷ views (quem não deslizou)
+
+type EngRow = { pub_id: number; channel_id: number; title: string; url: string; published_at: string; format: string; views: number
+  engaged_ratio: number; feed_engaged_ratio?: number | null; source: string; opening_type?: string | null; x_normal: number | null }
+type EngChan = { channel_id: number; name: string; format: string; videos: number; engaged_ratio: number; last5: number; prev10: number | null
+  delta: number | null; trend: { week: string; engaged_ratio: number; videos: number }[] }
+const pc = (v: number | null | undefined) => v == null ? '—' : `${Math.round(v * 100)}%`
+
+function EngagedCard({ cid }: { cid?: number }) {
+  const { data } = useApi<{ channels: EngChan[]; videos: EngRow[]; help: string }>(cid ? `/learning/engaged?channel_id=${cid}` : '/learning/engaged')
+  if (!data) return <Skeleton className="h-40 mb-5" />
+  if (!data.videos.length) return null
+  const avg = (ch: number, fmt: string) => data.channels.find(c => c.channel_id === ch && c.format === fmt)?.engaged_ratio ?? 0
+  return (
+    <section className="card overflow-hidden mb-5">
+      <SectionTitle hint={data.help}>Engajadas ÷ views <span className="text-muted font-normal">· baixo = o YouTube mostrou e ninguém ficou</span></SectionTitle>
+      <div className="p-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        {data.channels.map(c => (
+          <div key={`${c.channel_id}-${c.format}`} className="surface-2 p-3">
+            <div className="text-[12px] text-muted flex items-center gap-1.5">{!cid && <ChannelTag id={c.channel_id} />}{c.format === 'long' ? 'Longos' : 'Shorts'} · {c.videos} vídeos</div>
+            <div className="flex items-baseline gap-2 mt-1">
+              <span className="text-[22px] font-semibold num">{pc(c.last5)}</span>
+              <span className="text-[11.5px] text-muted">últimos 5</span>
+              {c.delta != null && <span className={`text-[12px] num ${c.delta >= 0.02 ? 'text-ok' : c.delta <= -0.02 ? 'text-bad' : 'text-muted'}`}>
+                {c.delta >= 0 ? '+' : ''}{Math.round(c.delta * 100)} pts vs 10 anteriores</span>}
+            </div>
+            <div className="text-[11.5px] text-faint">média geral {pc(c.engaged_ratio)}</div>
+            {c.trend.length > 1 && <Sparkline data={c.trend.map(t => t.engaged_ratio * 100)} height={26} className="mt-2" />}
+          </div>
+        ))}
+      </div>
+      <div className="overflow-x-auto max-h-80 overflow-y-auto border-t border-line">
+        <table className="tbl">
+          <thead><tr><th>Vídeo</th><th className="right">Views</th><th className="w-48">Engajadas ÷ views</th><th className="right" title="Só o feed do Shorts">Feed</th><th className="right">x normal</th></tr></thead>
+          <tbody>
+            {data.videos.slice(0, 40).map(v => {
+              const base = avg(v.channel_id, v.format)
+              const low = base > 0 && v.engaged_ratio < base * 0.8
+              return (
+                <tr key={v.pub_id}>
+                  <td><div className="flex items-center gap-2 min-w-56">{!cid && <ChannelTag id={v.channel_id} />}
+                    <a href={v.url} target="_blank" rel="noreferrer" className="truncate max-w-80 hover:underline">{v.title}</a>
+                    {v.opening_type && <span className="badge !h-5 text-[10.5px]">{v.opening_type}</span>}</div></td>
+                  <td className="right">{fmtNum(v.views)}</td>
+                  <td><div className="flex items-center gap-2"><Bar value={v.engaged_ratio * 100} tone={low ? 'bad' : undefined} className="flex-1" />
+                    <span className={`text-xs w-9 text-right num ${low ? 'text-bad' : ''}`} title={v.source === 'estimativa' ? 'estimado pela leitura de ~2 dias antes' : 'YouTube Analytics (orgânico)'}>{pc(v.engaged_ratio)}</span></div></td>
+                  <td className="right">{pc(v.feed_engaged_ratio)}</td>
+                  <td className={`right num ${v.x_normal != null && v.x_normal >= 1.3 ? 'text-ok' : v.x_normal != null && v.x_normal < 0.7 ? 'text-bad' : ''}`}>{v.x_normal != null ? `${v.x_normal.toFixed(1).replace('.', ',')}x` : '—'}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------- "por que flopou"
+
+type Diag = { pub_id: number; channel_id: number; title: string; url: string; format: string; age_h: number; views: number; x_normal: number | null
+  status: 'flop' | 'abaixo' | 'ok' | 'sem dados'; summary: string; partial: boolean; top_source?: string
+  causes: { key: string; label: string; severity: number; evidence: string; action: string }[] }
+const DIAG_TONE: Record<string, string> = { flop: 'badge-bad', abaixo: 'badge-warn', ok: 'badge-ok' }
+
+function DiagnoseCard({ cid }: { cid?: number }) {
+  const { data } = useApi<Diag[]>(`/learning/diagnose?${cid ? `channel_id=${cid}&` : ''}limit=40`)
+  const [showOk, setShowOk] = useState(false)
+  if (!data) return <Skeleton className="h-32 mb-5" />
+  const rows = data.filter(d => showOk || d.status === 'flop' || d.status === 'abaixo')
+  return (
+    <section className="card overflow-hidden mb-5">
+      <SectionTitle hint="A partir de 48 h no ar: gancho (quem deslizou), meio (queda na curva), tema (o feed não entregou) ou miniatura (longos). Flops também viram notificação."
+        action={<label className="text-xs text-muted inline-flex items-center gap-1.5"><input type="checkbox" checked={showOk} onChange={e => setShowOk(e.target.checked)} />mostrar os que foram bem</label>}>
+        Por que flopou
+      </SectionTitle>
+      {!rows.length ? <div className="p-5 text-[13px] text-muted">Nenhum vídeo abaixo do normal entre os que têm 48 h ou mais no ar.</div> : (
+        <ul className="divide-y divide-line">
+          {rows.slice(0, 15).map(d => (
+            <li key={d.pub_id} className="px-4 py-3">
+              <div className="flex items-start gap-3">
+                <span className={`badge ${DIAG_TONE[d.status] ?? ''} shrink-0 mt-0.5`}>{d.status}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-medium flex items-center gap-1.5">{!cid && <ChannelTag id={d.channel_id} />}
+                    <a href={d.url} target="_blank" rel="noreferrer" className="truncate hover:underline">{d.title}</a></div>
+                  <div className="text-[11.5px] text-muted">{d.x_normal != null ? `${d.x_normal.toFixed(2).replace('.', ',')}x o normal · ` : ''}{fmtNum(d.views)} views · {(Math.round(d.age_h / 2.4) / 10).toString().replace('.', ',')} dias no ar{d.top_source ? ` · origem principal: ${d.top_source}` : ''}</div>
+                  {d.causes.length ? (
+                    <ul className="mt-1.5 space-y-1.5">
+                      {d.causes.map(c => (
+                        <li key={c.key} className="text-[12.5px]">
+                          <b>{c.label}</b> <span className="text-muted">— {c.evidence}</span>
+                          <div className="text-text/85"><span className="text-accent">→</span> {c.action}</div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : <div className="text-[12.5px] text-muted mt-1">{d.summary}</div>}
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------- mapa de quedas × cortes
+
+type Cuts = { videos: number; heatmap: { s: number; drop: number | null; videos: number; cuts: number }[]; rule?: string
+  first_cut_drop?: number; other_cut_drop?: number | null; base_drop?: number; first_cut_median_s?: number; share_first_cut_worse?: number
+  first_cut_cluster?: boolean; other_cut_cluster?: boolean }
+
+function CutHeatmap({ cid }: { cid: number }) {
+  const { data } = useApi<Cuts>(`/learning/cuts?channel_id=${cid}`)
+  if (!data || data.videos < 2) return null
+  const max = Math.max(0.5, ...data.heatmap.map(h => h.drop ?? 0))
+  const maxCuts = Math.max(1, ...data.heatmap.map(h => h.cuts))
+  const n = (v?: number | null) => v == null ? '—' : v.toFixed(1).replace('.', ',')
+  return (
+    <div className="mt-4 pt-4 border-t border-line">
+      <div className="text-sm font-semibold">Onde o público sai × cortes de cena</div>
+      <div className="text-xs text-muted mb-2">Queda média por segundo ({data.videos} Shorts) — quanto mais quente, mais gente saiu; ▲ = quantos vídeos têm um corte de cena naquele segundo</div>
+      <div className="flex gap-[2px] items-end">
+        {data.heatmap.map(h => {
+          const t = Math.max(0, Math.min(1, (h.drop ?? 0) / max))
+          return (
+            <div key={h.s} className="flex-1 min-w-0 flex flex-col items-center" title={`${h.s}–${h.s + 1}s: −${n(h.drop)} pontos · ${h.cuts} corte(s) · ${h.videos} vídeos`}>
+              <div className="w-full text-[8px] leading-none text-center text-warn" style={{ opacity: h.cuts ? 0.35 + 0.65 * h.cuts / maxCuts : 0 }}>▲</div>
+              <div className="w-full h-7 rounded-[2px]" style={{ background: `color-mix(in srgb, var(--bad) ${Math.round(8 + t * 85)}%, var(--panel-2))` }} />
+              <div className="text-[9.5px] text-faint mt-0.5 h-3">{h.s % 5 === 0 ? `${h.s}s` : ''}</div>
+            </div>
+          )
+        })}
+      </div>
+      {data.base_drop != null && (
+        <div className="text-[12px] text-muted mt-2">
+          Logo depois do 1º corte (mediana {n(data.first_cut_median_s)}s): <b className={data.first_cut_cluster ? 'text-bad' : 'text-text'}>−{n(data.first_cut_drop)}</b> pontos/s ·
+          outros cortes: −{n(data.other_cut_drop)} · resto do vídeo: −{n(data.base_drop)}
+          {data.share_first_cut_worse != null && <> · o 1º corte é pior em {Math.round(data.share_first_cut_worse * 100)}% dos Shorts</>}
+        </div>
+      )}
+      {data.rule && <Callout tone="warn" className="mt-2">{data.rule}</Callout>}
     </div>
   )
 }
