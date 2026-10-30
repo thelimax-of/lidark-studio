@@ -381,25 +381,29 @@ def job_render(ctx: JobContext) -> dict:
     _check_claims(ch, sc.id, ctx)
     with session() as s:
         sc = s.get(Script, ctx.ref_id)
-    from .jobs import Cancelled
+    from .jobs import Cancelled, video_in_use
     try:
         out = produce_video(ch, sc, video.id, ctx)
     except Cancelled:
-        with session() as s:  # cancelado: não deixa vídeo "renderizando" para trás
+        with session() as s:  # cancelado: não deixa vídeo "renderizando" para trás (mas não apaga o de outra tarefa)
             v = s.get(Video, video.id)
-            if v:
+            if v and v.status == "rendering" and not video_in_use(s, video.id, ctx.job_id):
                 s.delete(v)
                 s.commit()
         raise
     except Exception as e:
         with session() as s:
             v = s.get(Video, video.id)
-            v.status, v.error = "failed", str(e)
-            s.add(v)
-            s.commit()
+            if v and not video_in_use(s, video.id, ctx.job_id):
+                v.status, v.error = "failed", str(e)
+                s.add(v)
+                s.commit()
         raise
     with session() as s:
         v = s.get(Video, video.id)
+        if v is None or v.script_id != sc.id:  # registro sumiu durante o render: o arquivo está pronto, recria
+            ctx.log(f"Registro do vídeo #{video.id} tinha sumido — recriado")
+            v = Video(channel_id=ch.id, script_id=sc.id, format=sc.format)
         v.status = "ready"
         v.path, v.thumbnail_path, v.duration, v.assets = out["path"], out["thumbnail"], out["duration"], out["assets"]
         s.add(v)

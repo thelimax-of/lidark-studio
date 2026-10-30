@@ -164,16 +164,27 @@ def bump(job_id: int) -> None:
     set_priority(job_id, top + 1)
 
 
+def video_in_use(s, video_id: int, except_job: int) -> bool:
+    """Outra tarefa de render (na fila ou rodando) usa este vídeo? O SQLite reaproveita o id de um vídeo apagado,
+    então um id guardado por uma tarefa velha pode já ser o vídeo de outra — nunca apague o vídeo dos outros."""
+    for o in s.exec(select(Job).where(Job.kind == "render_video", Job.status.in_(["queued", "running"]),
+                                      Job.id != except_job)).all():
+        if (o.payload or {}).get("_video_id") == video_id:
+            return True
+    return False
+
+
 def cancel(job_id: int) -> None:
     with session() as s:
         j = s.get(Job, job_id)
         if j and j.status in ("queued", "running"):
+            was_running = j.status == "running"
             j.status = "cancelled"
             j.finished_at = now()
             s.add(j)
             # vídeo em produção some da lista na hora (não fica "renderizando" até a thread perceber)
-            vid = (j.payload or {}).get("_video_id") if j.kind == "render_video" else None
-            if vid:
+            vid = (j.payload or {}).get("_video_id") if j.kind == "render_video" and was_running else None
+            if vid and not video_in_use(s, vid, job_id):
                 from .models import Video
                 v = s.get(Video, vid)
                 if v and v.status == "rendering":
