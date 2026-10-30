@@ -19,3 +19,4 @@ google-auth-oauthlib>=1.2
 google-auth-httplib2>=0.2
 orjson>=3.10
 pywebview>=5.3  # janela nativa do Lidark Studio (launcher/lidark_app.py)
+gradio_client>=1.0  # Modo História: FLUX.1-schnell no Hugging Face Space (fonte grátis de imagem)

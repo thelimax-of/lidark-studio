@@ -245,5 +245,10 @@ def start() -> None:
         log.warning("servidor de aprovação pelo celular: %s", e)
     _sched.add_job(lambda: enqueue("enem_bank_ideas", title="Pautas do banco ENEM"), "cron", hour=8, minute=10,
                    id="enem_bank", max_instances=1, coalesce=True)
+    # Modo História: gasta a sobra da cota grátis antes da renovação (21h) e faz as folhas de personagem logo depois
+    _sched.add_job(lambda: enqueue("story_pregen", title="Modo História: crescer bancos (sobra da cota)", payload={"max": 40}),
+                   "cron", hour=20, minute=15, id="story_pregen", max_instances=1, coalesce=True)
+    _sched.add_job(lambda: enqueue("story_pregen", title="Modo História: folhas dos protagonistas", payload={"max": 12, "bootstrap": True}),
+                   "cron", hour=21, minute=5, id="story_boot", max_instances=1, coalesce=True)
     _sched.start()
     log.info("agendador iniciado")

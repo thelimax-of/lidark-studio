@@ -2,7 +2,7 @@
 import { lazy, type ComponentType } from 'react'
 import {
   LayoutDashboard, Globe2, Bell, Lightbulb, FileText, Clapperboard, Image as ImageIcon, FlaskConical, Send, Activity,
-  MessageSquare, BarChart3, GraduationCap, Radar, Bot, CalendarRange, CalendarDays, Trophy, Crosshair, Tv, Plus, Settings as Cog, SlidersHorizontal,
+  MessageSquare, BarChart3, GraduationCap, Radar, Bot, CalendarRange, CalendarDays, BookOpen, Trophy, Crosshair, Tv, Plus, Settings as Cog, SlidersHorizontal,
   type LucideIcon,
 } from 'lucide-react'
 import { prefetch } from '../api'
@@ -16,6 +16,7 @@ export const LOADERS = {
   overview: () => named(import('./Sections'), 'OverviewPage'),
   notifications: () => import('../pages/Notifications'),
   ideas: () => import('../pages/Ideas'),
+  story: () => import('../pages/StoryMode'),
   scripts: () => import('../pages/Scripts'),
   script: () => import('../pages/ScriptEditor'),
   videos: () => import('../pages/Videos'),
@@ -46,6 +47,7 @@ export const ROUTES: { path: string; page: PageKey }[] = [
   { path: '/visao-geral', page: 'overview' },
   { path: '/notificacoes', page: 'notifications' },
   { path: '/pautas', page: 'ideas' },
+  { path: '/modo-historia', page: 'story' },
   { path: '/roteiros', page: 'scripts' },
   { path: '/roteiros/:id', page: 'script' },
   { path: '/videos', page: 'videos' },
@@ -85,6 +87,7 @@ export const NAV: NavGroup[] = [
   ] },
   { id: 'criar', label: 'Criar', items: [
     { to: '/pautas', label: 'Pautas', desc: 'Ideias pesquisadas, com nota e checagem de fatos', icon: Lightbulb, page: 'ideas', keywords: 'ideias' },
+    { to: '/modo-historia', label: 'Modo História', desc: 'Séries ilustradas com HUD de missão', icon: BookOpen, page: 'story', data: () => ['/story/overview'], keywords: 'historia serie personagem missao hud' },
     { to: '/roteiros', label: 'Roteiros', desc: 'Textos, cenas, ganchos e revisão', icon: FileText, page: 'scripts', data: cid => [cid ? `/scripts?channel_id=${cid}&slim=1` : null] },
     { to: '/videos', label: 'Vídeos', desc: 'Renders prontos, em produção e revisão', icon: Clapperboard, page: 'videos', data: cid => [cid ? `/videos?channel_id=${cid}&slim=1` : null] },
     { to: '/thumbs', label: 'Estúdio de thumbs', desc: 'Miniaturas e variações para teste', icon: ImageIcon, page: 'thumbs', keywords: 'thumbnail miniatura capa' },

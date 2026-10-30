@@ -55,6 +55,9 @@ def tv_metrics(template: Any) -> dict[str, Any]:
 
 
 def produce_video(ch: Channel, sc: Script, video_id: int, ctx: JobContext) -> dict[str, Any]:
+    if (sc.variety or {}).get("structure") == "historia":  # episódio do Modo História tem motor próprio
+        from .story.engine import produce_story
+        return produce_story(ch, sc, video_id, ctx)
     vertical = sc.format == "short"
     W, H = (1080, 1920) if vertical else (1920, 1080)
     workdir = MEDIA_DIR / ch.slug / f"video_{video_id}"
