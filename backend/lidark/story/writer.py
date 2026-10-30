@@ -303,6 +303,10 @@ def normalize(data: dict[str, Any], b: dict[str, Any], fmt: str, max_words: int)
 def write_episode(ch: Channel, b: dict[str, Any], fmt: str = "short", *, idea: Idea | None = None, topic: str = "",
                   arc: dict[str, Any] | None = None, plan: dict[str, Any] | None = None, seconds: float | None = None,
                   log=None, series_block: str = "", research_ok: bool = True, research_query: str = "") -> dict[str, Any]:
+    if b.get("render_style") == "vetor":  # motor vetorial: roteiro próprio (cenários, telas, placar); import só aqui
+        from . import vetor_writer
+        return vetor_writer.write_episode(ch, b, fmt, idea=idea, topic=topic, arc=arc, plan=plan, seconds=seconds, log=log,
+                                          series_block=series_block, research_ok=research_ok, research_query=research_query)
     plan = plan or {}
     rng = random.Random(f"{ch.id}-{time.time()}")
     if seconds is None:

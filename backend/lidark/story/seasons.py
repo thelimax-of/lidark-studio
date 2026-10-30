@@ -41,6 +41,9 @@ GENRES = {
     "deserto": "atravessar um deserto",
     "inverno": "nevasca / frio extremo",
 }
+MAX_PARTS = 60
+LENGTHS = (3, 3, 4, 4, 5, 6, 7, 8, 10, 12)  # sem pedido do dono, cada série sorteia o tamanho (a história ajusta)
+PARTS_CHUNK = 8  # séries grandes são planejadas em lotes: um pedido só de 30 partes vem cortado
 VOICES_NEW = {"m": [("pt-BR-AntonioNeural", "-10Hz", "-4%"), ("pt-BR-AntonioNeural", "+22Hz", "+6%")],
               "f": [("pt-BR-FranciscaNeural", "+4Hz", "+2%"), ("pt-BR-ThalitaMultilingualNeural", "+0Hz", "+0%")]}
 
@@ -92,7 +95,7 @@ def _recent(slug: str) -> tuple[list[str], list[str]]:
 def normalize_plan(d: dict[str, Any], b: dict[str, Any], mode: str = "opcoes") -> dict[str, Any] | None:
     if not isinstance(d, dict) or not d.get("title") or not isinstance(d.get("parts"), list):
         return None
-    parts = [p for p in d["parts"] if isinstance(p, dict) and (p.get("goal") or p.get("title"))][:6]
+    parts = [p for p in d["parts"] if isinstance(p, dict) and (p.get("goal") or p.get("title"))][:MAX_PARTS]
     if len(parts) < 3:
         return None
     known = {c["id"] for c in b.get("characters") or []}
@@ -116,7 +119,7 @@ def normalize_plan(d: dict[str, Any], b: dict[str, Any], mode: str = "opcoes") -
     for i, p in enumerate(parts):
         dec = p.get("decision") if isinstance(p.get("decision"), dict) else None
         last = i == len(parts) - 1
-        if mode != "sequencial" and dec and not last and decisions < 2 and isinstance(dec.get("options"), dict) and {"A", "B"} <= set(dec["options"]):
+        if mode != "sequencial" and dec and not last and decisions < max(2, len(parts) // 3) and isinstance(dec.get("options"), dict) and {"A", "B"} <= set(dec["options"]):
             decisions += 1
             dec = {"question": str(dec.get("question") or "")[:120], "options": {k: str(dec["options"][k])[:40] for k in ("A", "B")},
                    "default": "A" if str(dec.get("default") or "A").upper() != "B" else "B",
@@ -140,14 +143,43 @@ def normalize_plan(d: dict[str, Any], b: dict[str, Any], mode: str = "opcoes") -
 
 # ================================================================ pedido ao LLM
 
-def generate(ch: Channel, count: int = 2, seed_hint: str = "", log=print, mode: str = "opcoes") -> list[dict[str, Any]]:
-    """mode: "opcoes" (1-2 escolhas A/B do público por série) | "sequencial" (história contínua, sem votação)."""
+def _extend_parts(d: dict[str, Any], target: int, mode: str, log=print) -> None:
+    """Completa uma série grande em lotes, sempre a partir do que já foi planejado."""
+    for _ in range(target):
+        have = [p for p in d.get("parts") or [] if isinstance(p, dict)]
+        if len(have) >= target:
+            return
+        k = min(PARTS_CHUNK, target - len(have))
+        final = len(have) + k >= target
+        rule = "A última parte deste lote RESOLVE a missão." if final else "Nenhuma parte deste lote resolve a missão: a história continua, com novas complicações."
+        dec = '"decision": null em todas' if mode == "sequencial" else '"decision": null ou {"question", "options": {"A", "B"}, "default", "branches": {"A", "B"}} em no máximo uma parte'
+        recent = json.dumps(have[-3:], ensure_ascii=False)[:2500]
+        r = llm.complete_json(f"""Continue o plano da série "{d.get('title')}": {d.get('logline')}
+Local: {d.get('setting')}. Série de {target} partes; já existem {len(have)}. Últimas partes:
+{recent}
+Títulos já usados: {'; '.join(str(p.get('title')) for p in have)[:1500]}
+Escreva as próximas {k} partes, sem repetir situações, com escalada real. {rule}
+Cada parte: {{"title", "goal", "obstacle", "twist", "cliffhanger", "tip"}}, {dec}.
+Responda JSON: {{"parts": [...]}}""", temperature=0.9, required=("parts",), timeout=180)
+        more = [p for p in (r.get("parts") or []) if isinstance(p, dict)]
+        if not more:
+            log(f"Série \"{d.get('title')}\" ficou com {len(have)} partes (pedido: {target})")
+            return
+        d["parts"] = have + more[:k]
+
+
+def generate(ch: Channel, count: int = 2, seed_hint: str = "", log=print, mode: str = "opcoes", parts: int = 0) -> list[dict[str, Any]]:
+    """mode: "opcoes" (escolhas A/B do público) | "sequencial" (história contínua, sem votação).
+    parts: quantas partes por série; 0 = a IA decide a partir de um tamanho sorteado para cada série."""
     b = B.load(ch.slug)
     used_g, used_t = _recent(ch.slug)
     pool = [g for g in GENRES if g not in used_g[-3:]] or list(GENRES)
     rng = random.Random(time.time())
     rng.shuffle(pool)
     want = pool[:count]
+    parts = max(0, min(MAX_PARTS, int(parts or 0)))
+    sizes = [parts or rng.choice(LENGTHS) for _ in want]
+    sizes_txt = "; ".join(f"série {i + 1}: {min(z, PARTS_CHUNK)} partes" for i, z in enumerate(sizes))
     chars = "\n".join(f'  - id "{c["id"]}": {c["name"]} ({c.get("role", "")}) — {c["desc"][:120]}' for c in b.get("characters") or [])
     if mode == "sequencial":
         decision_rule = ('  "decision": null (SEMPRE null: esta é uma série SEQUENCIAL, sem votação do público — a história segue\n'
@@ -155,7 +187,7 @@ def generate(ch: Channel, count: int = 2, seed_hint: str = "", log=print, mode: 
     else:
         decision_rule = ('  "decision": null OU {"question": "pergunta curta ao público", "options": {"A": "...", "B": "..."}, "default": "A",\n'
                          '  "branches": {"A": "o que acontece se A", "B": "o que acontece se B"}}.\n'
-                         '  Use 1 ou 2 decisões por série (em partes do meio, NUNCA na última).')
+                         '  Use 1 ou 2 decisões a cada 6 partes (em partes do meio, NUNCA na última).')
     prompt = f"""Você planeja SÉRIES para o canal de Shorts "{ch.name}" (série "{b.get('series_title')}").
 PREMISSA DO CANAL: {b.get('premise')}
 ELENCO FIXO:
@@ -170,10 +202,11 @@ Cada série:
   (hours SÓ se a missão for um prazo e o título disser, ex.: "SOBREVIVA 72H").
 - "cast": [{{"id": "ze"}}, {{"id": "nina"}}...] + no máximo 1 personagem NOVO: {{"id": "curto", "name": "...", "role": "...",
   "gender": "m|f", "desc": "descrição VISUAL em inglês no estilo do canal (cabeça-esfera creme com dois olhinhos de ponto, roupa)"}}
-- "parts": 3 a 6 partes (a história decide). Cada parte: {{"title", "goal", "obstacle", "twist", "cliffhanger",
+- "parts": EXATAMENTE este número de partes agora, na ordem das séries ({sizes_txt}). As séries não têm todas o mesmo tamanho. Cada parte: {{"title", "goal", "obstacle", "twist", "cliffhanger",
   "tip": "uma dica REAL, realista e SEGURA de sobrevivência quando couber (ou vazio)",
 {decision_rule}
-  A última parte RESOLVE a missão e deixa um gancho para a próxima série ("finale_tease").
+  A última parte RESOLVE a missão e deixa um gancho para a próxima série ("finale_tease"). Tamanho total de cada série: {", ".join(str(z) for z in sizes)};
+  se o total for maior que o número pedido agora, a última parte daqui NÃO resolve: as demais serão escritas depois.
 REGRAS: suspense sem gore; nada que ensine algo perigoso; série de HISTÓRIA REAL só com eventos marcantes que NÃO
 sejam tragédias com vítimas reais (nada de incêndios, desabamentos, naufrágios, massacres ou acidentes com mortos como
 cenário de aventura — respeito às vítimas e às famílias); humor leve (o Zé é medroso mas esperto); dicas de
@@ -181,7 +214,12 @@ sobrevivência verdadeiras e seguras; em série de história real, nada inventad
 Responda JSON: {{"series": [{{...}}, {{...}}]}}"""
     data = llm.complete_json(prompt, temperature=0.9, required=("series",), timeout=180)
     out = []
-    for d in (data.get("series") or []) if isinstance(data, dict) else []:
+    for i, d in enumerate((data.get("series") or []) if isinstance(data, dict) else []):
+        if isinstance(d, dict) and i < len(sizes):
+            try:
+                _extend_parts(d, sizes[i], mode, log)
+            except llm.LLMError as e:
+                log(f"Completar a série falhou ({e}); fica com as partes já planejadas")
         p = normalize_plan(d, b, mode)
         if p:
             out.append(p)
@@ -225,7 +263,7 @@ def discover(ctx: JobContext, ch: Channel) -> dict:
     n = max(1, min(3, int(ctx.payload.get("count") or 2)))
     ctx.update(0.1, "Planejando séries (pautas que rendem várias partes)")
     mode = "sequencial" if ctx.payload.get("mode") == "sequencial" else "opcoes"
-    plans = generate(ch, n, ctx.payload.get("seed", ""), ctx.log, mode=mode)
+    plans = generate(ch, n, ctx.payload.get("seed", ""), ctx.log, mode=mode, parts=int(ctx.payload.get("parts") or 0))
     ids = create_ideas(ch, plans)
     return {"ideas": ids, "series": [p["title"] for p in plans]}
 

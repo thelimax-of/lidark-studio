@@ -255,7 +255,7 @@ def new_series(cid: int, data: Optional[dict[str, Any]] = None):
     d = data or {}
     j = jobs.enqueue("story_series_ideas", title="Planejar séries", channel_id=cid,
                      payload={"count": int(d.get("count") or 2), "seed": str(d.get("seed") or ""),
-                              "mode": "sequencial" if d.get("mode") == "sequencial" else "opcoes"})
+                              "mode": "sequencial" if d.get("mode") == "sequencial" else "opcoes", "parts": int(d.get("parts") or 0)})
     return {"job_id": j.id}
 
 

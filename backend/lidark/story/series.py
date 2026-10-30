@@ -26,7 +26,7 @@ from sqlmodel import select
 from ..db import session
 from ..jobs import enqueue
 from ..models import Channel, Comment, Idea, Job, Publication, Script, Video, now
-from . import seasons, writer
+from . import bible as B, seasons, writer
 
 log = logging.getLogger("lidark.story.series")
 _lock = threading.RLock()
@@ -600,7 +600,7 @@ def _tick_channel(ch: Channel) -> dict[str, Any]:
         if a.get("status") in ("open", "written") and len(parts) >= int(a.get("max_parts") or 99) and all(p.get("external_id") for p in parts):
             update_arc(ch.slug, a["id"], lambda x: x.update(status="closed"))
             a["status"] = "closed"
-        if (a.get("status") == "closed" and not a.get("long") and "long" in (ch.formats or [])
+        if (a.get("status") == "closed" and not a.get("long") and "long" in (ch.formats or []) and B.load(ch.slug).get("render_style") != "vetor"  # motor vetorial só desenha 9:16
                 and time.time() - _last_long_at(ch) > LONG_EVERY_DAYS * 86400 and not _jobs_busy(ch, ("story_assets", "story_render"))):
             make_long(ch, a)
             r["long"] = a["title"]

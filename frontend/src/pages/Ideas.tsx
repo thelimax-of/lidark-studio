@@ -368,7 +368,7 @@ function NewIdeaModal({ open, onClose }: { open: boolean; onClose: () => void })
 
 function DiscoverModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { channel } = useChannel()
-  const [f, setF] = useState({ seed: '', count: 8, format: 'short', mode: 'opcoes' })
+  const [f, setF] = useState({ seed: '', count: 8, format: 'short', mode: 'opcoes', parts: 0 })
   // canal só de histórias: cada pauta é uma série inteira — o dono escolhe se ela é sequencial ou com escolhas A/B
   const { data: bible } = useApi<{ dedicated?: boolean; enabled?: boolean }>(channel ? `/story/${channel.id}/bible` : null)
   const story = !!bible?.dedicated && bible?.enabled !== false
@@ -397,6 +397,10 @@ function DiscoverModal({ open, onClose }: { open: boolean; onClose: () => void }
                 <button key={k} type="button" className="flex-1 justify-center" data-active={f.mode === k} onClick={() => setF({ ...f, mode: k })}>{l}</button>
               ))}
             </div>
+          </Field>)}
+        {story && (
+          <Field label="Episódios por série" hint="0 = a IA decide e cada série sai com um tamanho diferente. Para uma série diária, coloque 30.">
+            <input type="number" min={0} max={60} className="input" value={f.parts} onChange={e => setF({ ...f, parts: Number(e.target.value) })} />
           </Field>)}
         <button className="btn btn-primary btn-lg w-full" onClick={submit}><Sparkles size={16} /> {story ? 'Planejar séries' : 'Buscar'}</button>
       </div>
