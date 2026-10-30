@@ -94,6 +94,84 @@ Responda JSON: {{"frames": [{{"severity": 0, "problem": ""}}]}}"""
     return results
 
 
+# ================================================================ TV primeiro (vídeos longos)
+#
+# Vídeo longo é visto cada vez mais na TV, a ~3 m da tela. Regras (relativas à altura do quadro, valem p/ 720p/1080p/4K):
+# - legenda: letra ≥ 4,5% da altura (≈ 49 px em 1080p) → lida sem esforço a 3 m numa TV de 50"
+# - textos de apoio (etiqueta, PASSO x/n, título do cabeçalho): ≥ 2,4% (≈ 26 px)
+# - contraste da faixa da legenda (WCAG, claro × escuro): ≥ 7 bom, ≥ 4,5 aceitável
+# - ritmo: no sofá, corte a cada < 3 s e narração > 190 palavras/min cansam (ritmo de Short não serve para TV)
+TV_CAPTION_MIN, TV_CAPTION_WARN = 0.045, 0.038
+TV_SMALL_MIN = 0.024
+
+
+def _lum(img) -> Any:
+    import numpy as np
+    a = np.asarray(img.convert("RGB"), dtype=np.float32) / 255.0
+    lin = np.where(a <= 0.04045, a / 12.92, ((a + 0.055) / 1.055) ** 2.4)
+    return lin[..., 0] * 0.2126 + lin[..., 1] * 0.7152 + lin[..., 2] * 0.0722
+
+
+def caption_contrast(path: Path, tv: dict[str, Any], times: list[float]) -> list[float]:
+    """Contraste (WCAG) na faixa da legenda em alguns quadros: tons claros (letra) × escuros (caixa/contorno)."""
+    import numpy as np
+    from PIL import Image
+    W, H = int(tv.get("W") or 1920), int(tv.get("H") or 1080)
+    cy, cx = float(tv.get("caption_cy") or H * 0.9), float(tv.get("caption_cx") or W / 2)
+    half_w, half_h = float(tv.get("caption_maxw") or W * 0.6) / 2, float(tv.get("caption_px") or 50) * 1.3
+    out = []
+    for b in sample_frames(path, times, (W, H)):
+        im = Image.open(io.BytesIO(b))
+        sx, sy = im.width / W, im.height / H
+        box = (int((cx - half_w) * sx), int((cy - half_h) * sy), int((cx + half_w) * sx), int((cy + half_h) * sy))
+        y = _lum(im.crop(box)).ravel()
+        if not len(y):
+            continue
+        hi, lo = float(np.percentile(y, 98)), float(np.percentile(y, 5))
+        out.append((hi + 0.05) / (lo + 0.05))
+    return out
+
+
+def tv_checks(path: Path, a: dict[str, Any]) -> list[dict[str, str]]:
+    import statistics
+    checks: list[dict[str, str]] = []
+    tv = a.get("tv") or {}
+    H = float(tv.get("H") or 1080)
+    if tv.get("caption_px"):
+        rel = float(tv["caption_px"]) / H
+        lvl = "ok" if rel >= TV_CAPTION_MIN else ("warn" if rel >= TV_CAPTION_WARN else "fail")
+        checks.append(_check("TV: tamanho da legenda", lvl, f"{rel * 100:.1f}% da altura da tela "
+                                                             f"(mínimo {TV_CAPTION_MIN * 100:.1f}% para ler a 3 m)"))
+    if tv.get("small_text_px"):
+        rel = float(tv["small_text_px"]) / H
+        checks.append(_check("TV: textos de apoio", "ok" if rel >= TV_SMALL_MIN else "warn",
+                             f"menor texto com {rel * 100:.1f}% da altura (mínimo {TV_SMALL_MIN * 100:.1f}%)"))
+    scenes = a.get("scenes") or []
+    if tv and path.exists() and scenes:
+        times = [s["start"] + (s["end"] - s["start"]) * 0.6 for s in scenes[1:] if s["end"] - s["start"] > 1.2][:8]
+        try:
+            cr = caption_contrast(path, tv, times)
+        except Exception as e:  # noqa: BLE001
+            log.warning("contraste: %s", e)
+            cr = []
+        if cr:
+            worst, med = min(cr), statistics.median(cr)
+            lvl = "ok" if worst >= 7 else ("warn" if worst >= 4.5 else "fail")
+            checks.append(_check("TV: contraste da legenda", lvl, f"pior {worst:.1f}:1, mediana {med:.1f}:1 "
+                                                                  f"em {len(cr)} quadros (bom ≥ 7:1)"))
+    narr = float(a.get("narration_end") or 0)
+    if len(scenes) >= 3 and narr > 30:
+        durs = [s["end"] - s["start"] for s in scenes]
+        med = statistics.median(durs)
+        cpm = (len(scenes) - 1) / (narr / 60)
+        wpm = float((a.get("captions") or {}).get("timed_words") or 0) / (narr / 60)
+        frantic = med < 3.0 or cpm > 16 or wpm > 190
+        lvl = "fail" if (med < 2.0 or wpm > 215) else ("warn" if frantic else "ok")
+        checks.append(_check("TV: ritmo", lvl, f"cena média {med:.1f}s, {cpm:.0f} cortes/min, {wpm:.0f} palavras/min"
+                                               + (" — frenético para a TV" if frantic else "")))
+    return checks
+
+
 def _estimate_scenes(sc: Script, narr: float) -> list[dict[str, Any]]:
     """Vídeos antigos (sem tempos gravados): estima as cenas pela proporção de palavras."""
     texts = [x.get("text", "") for x in (sc.scenes or []) if x.get("text")]
@@ -128,8 +206,11 @@ def inspect(ch: Channel, sc: Script, video: Video) -> dict[str, Any]:
     last = ((sc.scenes or [{}])[-1].get("text") or "").strip()
     has_cta = any(w in last.lower() for w in CTA_WORDS) or (ch.cta and ch.cta.lower()[:15] in last.lower())
     dangling = last.endswith(("...", "…"))
-    checks.append(_check("Final do roteiro", "fail" if dangling else ("ok" if has_cta else "warn"),
-                         "termina com reticências" if dangling else ("termina no CTA" if has_cta else "sem chamada final")))
+    if a.get("loop") and not dangling:  # Short em loop: a última frase emenda na primeira, sem CTA no fim
+        checks.append(_check("Final do roteiro", "ok", "loop: o fim emenda no começo"))
+    else:
+        checks.append(_check("Final do roteiro", "fail" if dangling else ("ok" if has_cta else "warn"),
+                             "termina com reticências" if dangling else ("termina no CTA" if has_cta else "sem chamada final")))
     # 4) áudio
     if path.exists() and narr:
         st = audio_stats(path, narr)
@@ -139,8 +220,8 @@ def inspect(ch: Channel, sc: Script, video: Video) -> dict[str, Any]:
         else:
             lvl = "ok" if -19 <= lufs <= -10 else ("warn" if -23 <= lufs <= -8 else "fail")
             checks.append(_check("Volume", lvl, f"{lufs:.1f} LUFS (ideal entre -19 e -10)"))
-        if st["peak"] is not None and st["peak"] > -0.5:
-            checks.append(_check("Pico de áudio", "warn", f"{st['peak']:.1f} dBFS (risco de estourar)"))
+        if st["peak"] is not None and st["peak"] > -1.0:
+            checks.append(_check("Pico de áudio", "warn", f"{st['peak']:.1f} dBTP (acima de -1 dBTP: risco de estourar)"))
         long_sil = [x for x in st["silences"] if x >= 1.6]
         checks.append(_check("Silêncios", "ok" if not long_sil else ("warn" if len(long_sil) == 1 else "fail"),
                              "nenhum silêncio longo" if not long_sil else f"{len(long_sil)} silêncio(s) de até {max(long_sil):.1f}s"))
@@ -154,6 +235,9 @@ def inspect(ch: Channel, sc: Script, video: Video) -> dict[str, Any]:
         lvl = "ok" if same and diff <= 1.5 else ("warn" if diff <= 3 else "fail")
         checks.append(_check("Sincronia das legendas", lvl,
                              f"{cap.get('timed_words')}/{cap.get('script_words')} palavras, fim a {diff:.1f}s da voz"))
+    # 5b) vídeo longo: pensado para a TV (legibilidade a 3 m, contraste, ritmo)
+    if not vertical:
+        checks += tv_checks(path, a)
     # 6) revisão visual
     scenes_t = a.get("scenes") or _estimate_scenes(sc, narr)
     vis = visual_review(path, scenes_t, vertical) if path.exists() else []

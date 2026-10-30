@@ -19,6 +19,18 @@ from .mascot import plan_mouth
 SERIF = "Cinzel.ttf"
 SANS_XB = "FiraSans-ExtraBold.ttf"
 SANS_B = "FiraSans-Bold.ttf"
+HL_MODES = ("color", "duo", "underline")
+OPEN_BOOST_S = 1.5
+
+
+def _second_accent(hex_: str) -> str:
+    """Cor de apoio para nomes próprios no modo 'duo': o tom complementar da cor de destaque, claro e legível."""
+    import colorsys
+    from .core import hex2rgb
+    r, g, b = (c / 255 for c in hex2rgb(hex_))
+    h, s, v = colorsys.rgb_to_hsv(r, g, b)
+    r, g, b = colorsys.hsv_to_rgb((h + 0.47) % 1.0, min(0.55, max(0.35, s)), max(0.9, v))
+    return "#%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
 
 
 class OuroTemplate:
@@ -58,6 +70,15 @@ class OuroTemplate:
         self.cap_style = self.lk.get("caption", "classic")
         self.cap_words = int(self.lk.get("caption_words", 4))
         self.cap_anim = self.lk.get("caption_anim", "pop")
+        # destaque semântico (datas, números, nomes, ênfases): o modo vem do look; vídeos antigos sorteiam pelo título
+        seed = sum(ord(c) for c in tl.title)
+        self.hl_mode = self.lk.get("highlight") or HL_MODES[seed % len(HL_MODES)]
+        hi_hex = self.th.get("caption_hi", "#e9b440")
+        self.hi_rgba = rgba(hi_hex)
+        self.hi2_rgba = rgba(self.th.get("caption_hi2") or _second_accent(hi_hex))
+        # abertura "motion": Ken Burns forte e rápido no 1º 1,5 s (direção alterna por vídeo)
+        self.opening = str(self.th.get("_opening") or "")
+        self._open_dir = 1 if seed % 2 else -1
         self.bg = self._background()
         self.card_img = self._card()
         self.coin_small = self._coin(int(32 * self.k))
@@ -233,6 +254,14 @@ class OuroTemplate:
         boxed = style in ("classic", "highlight")
         ink = (14, 14, 16, 255)
 
+        def hic(wd) -> tuple:
+            return self._hi_color(wd)
+
+        def underline(d: ImageDraw.ImageDraw, ss: float, wd, x: float, y: float, ww: float, visible: bool) -> None:
+            if self.hl_mode == "underline" and wd.hi and visible:
+                y0 = y + lh * 0.36
+                d.rounded_rectangle((x * ss, y0 * ss, (x + ww) * ss, (y0 + 6 * k) * ss), int(3 * k * ss), fill=hic(wd))
+
         def draw(d: ImageDraw.ImageDraw, ss: float):
             if boxed:
                 d.rounded_rectangle((0, 0, (w - 1) * ss, (h - 1) * ss), int(16 * k * ss), fill=(*rgba(th.get("caption_bg", "#121814"))[:3], 238),
@@ -251,22 +280,43 @@ class OuroTemplate:
                         if current:
                             d.rounded_rectangle(((x - 4 * k) * ss, (y - lh * 0.4) * ss, (x + ww + 4 * k) * ss, (y + lh * 0.38) * ss),
                                                 int(10 * k * ss), fill=hi)
-                        color = ink if current else (hi if wd.hi else white)
+                        color = ink if current else (hic(wd) if wd.hi else white)
                         d.text((x * ss, y * ss), wd.text, font=fs, fill=color, anchor="lm")
+                        underline(d, ss, wd, x, y, ww, not current)
                     elif style == "karaoke":  # sem caixa; contorno grosso, falado em destaque
-                        color = hi if (n < spoken and (wd.hi or current)) else (white if n < spoken else (*white[:3], 150))
+                        color = (hic(wd) if wd.hi else hi) if (n < spoken and (wd.hi or current)) else \
+                            (white if n < spoken else (*white[:3], 150))
                         d.text((x * ss, y * ss), wd.text, font=fs, fill=color, anchor="lm", stroke_width=stroke, stroke_fill=ink)
+                        underline(d, ss, wd, x, y, ww, n < spoken)
                     elif style == "bold":  # sem caixa; só as palavras já faladas aparecem
                         if n < spoken:
-                            color = hi if (wd.hi or current) else white
+                            color = hic(wd) if wd.hi else (hi if current else white)
                             d.text(((x + 3 * k) * ss, (y + 5 * k) * ss), wd.text, font=fs, fill=(0, 0, 0, 150), anchor="lm")
                             d.text((x * ss, y * ss), wd.text, font=fs, fill=color, anchor="lm", stroke_width=stroke, stroke_fill=ink)
+                            underline(d, ss, wd, x, y, ww, True)
                     else:
-                        color = hi if wd.hi else (white if n < spoken else dim)
+                        color = hic(wd) if wd.hi else (white if n < spoken else dim)
                         d.text((x * ss, y * ss), wd.text, font=fs, fill=color, anchor="lm")
+                        underline(d, ss, wd, x, y, ww, n < spoken)
                     x += ww + space
                     n += 1
         return supersampled(w, h, draw, 2)
+
+    def _hi_color(self, wd) -> tuple:
+        """Cor da palavra destacada conforme o tipo (data/número/nome/ênfase) e o modo de destaque do vídeo."""
+        kind = getattr(wd, "kind", "") or ""
+        if self.hl_mode == "duo" and kind == "name":
+            return self.hi2_rgba
+        if self.hl_mode == "underline" and kind == "name":
+            return rgba(self.th.get("caption_text", "#f1efe6"))  # nome em branco com sublinhado colorido
+        return self.hi_rgba
+
+    def _open_boost(self, t: float) -> tuple[float, float]:
+        """Abertura 'motion': zoom extra e deslize lateral que se desfazem rápido no 1º 1,5 s (só Ken Burns, leve)."""
+        if self.opening != "motion" or t >= OPEN_BOOST_S:
+            return 0.0, 0.0
+        e = 1 - ease_out_cubic(clamp(t / OPEN_BOOST_S))
+        return 0.32 * e, 0.12 * e * self._open_dir
 
     def _draw_caption(self, out: Image.Image, t: float, cx: float) -> None:
         """Legenda do trecho atual, com a animação de entrada sorteada para o vídeo."""
@@ -603,7 +653,10 @@ class OuroTemplate:
                     z = 1.18 - 0.1 * ease_out_cubic(local / 1.2) + 0.06 * local / dur
                 else:
                     grow, z = 0.6 + 0.4 * ease_out_cubic(local / dur), 1 + 0.08 * local / dur
-                fi = fx._scale(self._framed_image(sc.index, w, h, z), grow)
+                bz, bx = self._open_boost(t)
+                if bz:  # abertura "motion": a foto já entra inteira, com zoom e deslize fortes
+                    grow = max(grow, 0.96)
+                fi = fx._scale(self._framed_image(sc.index, w, h, z + bz, (0.5 + bx, 0.42)), grow)
                 self._place(out, fi, x1 + cw / 2, y1 + ch * 0.66, 1)
             if self.vertical:  # manchete do gancho entre o cartão e o mascote, legível desde o 1º quadro
                 hk = self._hook_img("gold", int(self.caption_maxw), int(80 * k))

@@ -190,7 +190,9 @@ class LivreTemplate(OuroTemplate):
         if lay == "intro" and self.lk.get("intro", "typed") != "typed":
             return self._intro_alt(sc, t, p, photo)
         if lay == "intro":
-            out = fit_cover(photo, W, H, zoom=(1.0 if sc.clip is not None else 1.08 + 0.12 * p), focus=(0.5, 0.35)).convert("RGBA")
+            bz, bx = self._open_boost(local)
+            out = fit_cover(photo, W, H, zoom=(1.0 if sc.clip is not None else 1.08 + 0.12 * p + bz),
+                            focus=(0.5 + bx, 0.35)).convert("RGBA")
             out.alpha_composite(Image.new("RGBA", (W, H), (*hex2rgb(self.th.get("bg_edge", "#061915")), 150)))
             out.alpha_composite(self.vignette)
             spoken = [w for w in sc.words if w.start <= t + 0.05]
@@ -269,6 +271,8 @@ class LivreTemplate(OuroTemplate):
             foc = (0.38 + 0.24 * ease_out_cubic(clamp(local / 2.5)), 0.38)
         else:  # typed: avanço rápido no começo, depois Ken Burns lento
             z = 1.04 + 0.1 * ease_out_cubic(clamp(local / 1.2)) + 0.08 * p
+        bz, bx = self._open_boost(local)
+        z, foc = z + bz, (foc[0] + bx, foc[1])
         if photo is not None:
             out = fit_cover(photo, W, H, zoom=(1.0 if sc.clip is not None else z), focus=foc).convert("RGBA")
             out.alpha_composite(Image.new("RGBA", (W, H), (*edge, 120 if style == "band" else 140)))
@@ -313,7 +317,7 @@ class LivreTemplate(OuroTemplate):
                 s_ = 0.7 + 0.3 * ease_out_back(clamp(age / 0.16), 2.0) if spoken else 1.0
                 img = Image.new("RGBA", (int(W * 0.96), int(size * 1.6)), (0, 0, 0, 0))
                 ImageDraw.Draw(img).text((img.width / 2, img.height / 2), wd.text.upper(), font=f,
-                                         fill=hi if wd.hi else (250, 246, 236, 255), anchor="mm",
+                                         fill=self._hi_color(wd) if wd.hi else (250, 246, 236, 255), anchor="mm",
                                          stroke_width=int(8 * k), stroke_fill=(8, 8, 10, 255))
                 img = scaled(img, s_)
                 paste(out, img, (W / 2 - img.width / 2, H * 0.43 - img.height / 2))
@@ -358,7 +362,9 @@ class LivreTemplate(OuroTemplate):
             z = 1.08 + 0.32 * (1 - ease_out_cubic(clamp((t - sc.start) / 0.6))) + 0.06 * p
         else:
             z = 1.1 + 0.1 * p
-        out = fit_cover(photo or sc.image, W, H, zoom=(1.0 if sc.clip is not None else z), focus=(0.5, 0.38)).convert("RGBA")
+        bz, bx = self._open_boost(t - sc.start)
+        out = fit_cover(photo or sc.image, W, H, zoom=(1.0 if sc.clip is not None else z + bz),
+                        focus=(0.5 + bx, 0.38)).convert("RGBA")
         out.alpha_composite(Image.new("RGBA", (W, H), (*edge, 120 if style == "band" else 140)))
         out.alpha_composite(self.vignette)
         d = ImageDraw.Draw(out)
@@ -371,7 +377,7 @@ class LivreTemplate(OuroTemplate):
                 s_ = 0.7 + 0.3 * ease_out_back(clamp(age / 0.16), 2.0)
                 img = Image.new("RGBA", (int(W * 0.96), int(size * 1.6)), (0, 0, 0, 0))
                 ImageDraw.Draw(img).text((img.width / 2, img.height / 2), wd.text.upper(), font=f,
-                                         fill=hi if wd.hi else (250, 246, 236, 255), anchor="mm",
+                                         fill=self._hi_color(wd) if wd.hi else (250, 246, 236, 255), anchor="mm",
                                          stroke_width=int(8 * k), stroke_fill=(8, 8, 10, 255))
                 img = scaled(img, s_)
                 paste(out, img, (W / 2 - img.width / 2, H * (0.36 if self.vertical else 0.42) - img.height / 2))
