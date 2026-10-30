@@ -93,11 +93,21 @@ def load(name: str):
                                                          variant="fp16", local_files_only=True)
         pipe.load_lora_weights(str(models / "lightning" / "sdxl_lightning_4step_lora.safetensors"))
         pipe.fuse_lora()
+        pipe.unload_lora_weights()
         pipe.scheduler = EulerDiscreteScheduler.from_config(pipe.scheduler.config, timestep_spacing="trailing")
-        i2i = StableDiffusionXLImg2ImgPipeline(**pipe.components)
-        pipe.enable_model_cpu_offload()
-        i2i.enable_model_cpu_offload()
+        # tudo na GPU (sem offload para a RAM): UNet e text encoders guardados em FP8 (calculam em FP16) e o VAE
+        # "fp16-fix" (sem upcast fp32). Medido na RTX 3050 6 GB: 3,5 GB carregado, pico 4,05 GB, ~5 s por 768x1344.
+        from diffusers import AutoencoderKL
+        from diffusers.hooks import apply_layerwise_casting
+        pipe.unet.enable_layerwise_casting(storage_dtype=torch.float8_e4m3fn, compute_dtype=torch.float16)
+        for te in (pipe.text_encoder_2, pipe.text_encoder):
+            apply_layerwise_casting(te, storage_dtype=torch.float8_e4m3fn, compute_dtype=torch.float16,
+                                    skip_modules_pattern=("embed", "norm", "position"))
+        pipe.vae = AutoencoderKL.from_pretrained(str(models / "vae-fp16-fix"), torch_dtype=torch.float16)
+        pipe.vae.config.force_upcast = False
+        pipe.to("cuda")
         pipe.vae.enable_tiling()
+        i2i = StableDiffusionXLImg2ImgPipeline(**pipe.components)
         STATE.update(native=(768, 1344), steps=4, cfg=1.0)
     else:
         from diffusers import LCMScheduler, StableDiffusionImg2ImgPipeline, StableDiffusionPipeline
