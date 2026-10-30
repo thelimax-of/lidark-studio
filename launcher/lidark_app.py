@@ -38,10 +38,26 @@ def focus_existing() -> bool:
     """Se a janela já está aberta, traz para frente em vez de abrir outra."""
     if os.name != "nt":
         return False
+    from ctypes import wintypes
     user32 = ctypes.windll.user32
-    hwnd = user32.FindWindowW(None, TITLE)
-    if not hwnd:
+    # só conta a janela do próprio app (WinForms do pywebview): uma aba do Edge com o painel aberto
+    # também se chama "Lidark Studio" e fazia o app achar que já estava aberto e sair sem abrir nada
+    found: list[int] = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def each(hwnd, _):
+        title, cls = ctypes.create_unicode_buffer(256), ctypes.create_unicode_buffer(256)
+        user32.GetWindowTextW(hwnd, title, 256)
+        user32.GetClassNameW(hwnd, cls, 256)
+        if title.value == TITLE and cls.value.startswith("WindowsForms"):
+            found.append(hwnd)
+            return False
+        return True
+
+    user32.EnumWindows(each, 0)
+    if not found:
         return False
+    hwnd = found[0]
     user32.ShowWindow(hwnd, 9)  # SW_RESTORE
     user32.SetForegroundWindow(hwnd)
     return True
