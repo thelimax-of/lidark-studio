@@ -84,7 +84,9 @@ def tv_set(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, Any
     ft = h.F("ui", 16)
     unit = ft.getlength(tick + "   •   ")
     off = (lt * h.s(110)) % max(1.0, unit)
-    d.text((sx0 + h.s(8) - off, (ty + sy1) / 2), (tick + "   •   ") * 4, font=ft, fill=(240, 240, 240), anchor="lm")
+    band = Image.new("RGBA", (int(sx1 - sx0), max(1, int(sy1 - ty))), (0, 0, 0, 0))  # só dentro da tela
+    ImageDraw.Draw(band).text((h.s(8) - off, band.height / 2), (tick + "   •   ") * 4, font=ft, fill=(240, 240, 240), anchor="lm")
+    c.alpha_composite(band, (int(sx0), int(ty)))
     _scanlines(c, (sx0, sy0, sx1, sy1), h.s(3))
     c = _glow(c, (sx0, sy0, sx1, sy1), bgc, h.s(24))
     h.put(base, c, (h.W - c.width) / 2, place(h, data, 0.5, c.height) + (1 - k) * h.s(260), a)
@@ -202,16 +204,33 @@ def phone_screen(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[st
             x = sx1 - bw - h.s(12) if me else sx0 + h.s(12)
             fill = (210, 245, 190, 255) if me else (245, 245, 250, 255)
             if m.get("audio"):
-                bh = h.s(62)
+                bh = h.s(76)
                 d.rounded_rectangle((x, y, x + bw, y + bh), h.s(20), fill=fill)
-                d.polygon([(x + h.s(18), y + h.s(18)), (x + h.s(18), y + h.s(44)), (x + h.s(38), y + h.s(31))], fill=(60, 60, 70))
-                prog = min(1.0, max(0.0, (lt - 0.3) / max(0.5, dur - 0.8)))
-                n = max(8, int((bw - h.s(70)) / h.s(9)))
-                for j in range(n):
-                    played = j / n <= prog
-                    amp = h.s(5) + h.s(20) * (abs(math.sin(j * 1.9)) * 0.4 + (lv if abs(j / n - prog) < 0.12 else 0) * 0.6)
-                    bx = x + h.s(52) + j * h.s(9)
-                    d.rectangle((bx, y + bh / 2 - amp / 2, bx + h.s(4), y + bh / 2 + amp / 2), fill=(40, 140, 220) if played else (150, 150, 160))
+                cy = y + bh / 2 - h.s(4)
+                who = str(m.get("from") or data.get("title") or "?")[:1].upper()
+                ax = x + h.s(36)
+                d.ellipse((ax - h.s(24), cy - h.s(24), ax + h.s(24), cy + h.s(24)), fill=(90, 160, 120, 255))
+                d.text((ax, cy), who, font=h.F("title", 26), fill=(255, 255, 255), anchor="mm")
+                start, total = 0.35, max(0.6, dur - 0.7)
+                prog = min(1.0, max(0.0, (lt - start) / total))
+                playing = 0 < prog < 1
+                px = x + h.s(84)
+                if playing:  # pausa
+                    for dx in (0, h.s(10)):
+                        d.rectangle((px + dx - h.s(2), cy - h.s(11), px + dx + h.s(4), cy + h.s(11)), fill=(70, 70, 80))
+                else:  # play
+                    d.polygon([(px - h.s(4), cy - h.s(13)), (px - h.s(4), cy + h.s(13)), (px + h.s(16), cy)], fill=(70, 70, 80))
+                wx0, wx1 = x + h.s(112), x + bw - h.s(18)
+                n = max(10, int((wx1 - wx0) / h.s(8)))
+                for j in range(n):  # forma de onda FIXA (como num app); a parte já ouvida fica azul
+                    amp = h.s(6) + h.s(22) * (0.35 + 0.65 * abs(math.sin(j * 1.37) * math.cos(j * 0.53)))
+                    bx = wx0 + j * (wx1 - wx0) / n
+                    d.rounded_rectangle((bx, cy - amp / 2, bx + h.s(4), cy + amp / 2), h.s(2),
+                                        fill=(52, 150, 230) if j / n <= prog else (165, 170, 180))
+                dot = wx0 + (wx1 - wx0) * prog
+                d.ellipse((dot - h.s(7), cy - h.s(7), dot + h.s(7), cy + h.s(7)), fill=(52, 150, 230))
+                secs = (lt - start) if playing else total
+                d.text((wx0, y + bh - h.s(12)), f"0:{int(max(0, secs)):02d}", font=h.F("ui", 13), fill=(110, 115, 125), anchor="lm")
             else:
                 lines = wrap(str(m.get("text", "")), fb, bw - h.s(30))[:4]
                 bh = h.s(20) + len(lines) * h.s(27) + (h.s(22) if m.get("from") and not me else 0)
