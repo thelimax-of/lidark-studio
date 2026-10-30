@@ -655,3 +655,59 @@ def overview(ch: Channel) -> dict[str, Any]:
                     "long": a.get("long"), "newcomers": (a.get("plan") or {}).get("newcomers")})
     pend = [{"idea_id": i.id, "title": i.title, "status": i.status, "plan": seasons.load_plan(ch.slug, i.id)} for i in seasons.pending_series(ch)]
     return {"series": ser, "pending": pend, "vote_wait_hours": vote_wait_hours(ch)}
+
+
+# ================================================================ cancelar / apagar
+
+def delete_series(ch: Channel, *, arc_id: str | None = None, idea_id: int | None = None) -> dict[str, Any]:
+    """Cancela e apaga uma série do painel: para as tarefas na fila/rodando dela, apaga roteiros, vídeos e agendamentos
+    que ainda NÃO foram ao ar, a pauta e o plano. Vídeos já publicados continuam no YouTube (só saem do painel)."""
+    import shutil
+    from ..config import MEDIA_DIR
+    from ..jobs import cancel as cancel_job
+    arc = get_arc(ch.slug, arc_id) if arc_id else next((a for a in arcs(ch.slug) if idea_id and a.get("idea_id") == idea_id), None)
+    idea_id = idea_id or (arc or {}).get("idea_id")
+    sids = {p.get("script_id") for p in (arc or {}).get("parts") or [] if p.get("script_id")}
+    if (arc or {}).get("long", {}).get("script_id"):
+        sids.add(arc["long"]["script_id"])
+    with session() as s:
+        if idea_id:
+            sids |= {sc.id for sc in s.exec(select(Script).where(Script.idea_id == idea_id)).all()}
+        sids.discard(None)
+        jobs_ = s.exec(select(Job).where(Job.channel_id == ch.id, Job.status.in_(["queued", "running"]))).all()
+        kill = [j.id for j in jobs_ if j.ref_id in sids or (j.payload or {}).get("idea_id") == idea_id
+                or (idea_id and j.ref_id == idea_id and j.kind in ("story_episode", "verify_idea", "manual_idea"))]
+    for jid in kill:
+        cancel_job(jid)
+    out = {"jobs_cancelled": len(kill), "scripts": 0, "videos": 0, "kept_published": 0}
+    with session() as s:
+        for sid in sids:
+            for v in s.exec(select(Video).where(Video.script_id == sid)).all():
+                pubs = s.exec(select(Publication).where(Publication.video_id == v.id)).all()
+                if any(p.status == "published" for p in pubs):
+                    out["kept_published"] += 1  # já está no YouTube: mantém o registro (métricas) e só some da série
+                    continue
+                for p in pubs:
+                    s.delete(p)
+                shutil.rmtree(MEDIA_DIR / ch.slug / f"video_{v.id}", ignore_errors=True)
+                s.delete(v)
+                out["videos"] += 1
+            sc = s.get(Script, sid)
+            if sc and not s.exec(select(Video).where(Video.script_id == sid)).first():
+                s.delete(sc)
+                out["scripts"] += 1
+        if idea_id and (idea := s.get(Idea, idea_id)):
+            if not s.exec(select(Script).where(Script.idea_id == idea_id)).first():
+                s.delete(idea)
+            else:
+                idea.status = "rejected"
+                s.add(idea)
+        s.commit()
+    with _lock:
+        d = writer.series(ch.slug)
+        d["arcs"] = [a for a in d.get("arcs") or [] if not ((arc and a.get("id") == arc["id"]) or (idea_id and a.get("idea_id") == idea_id))]
+        writer._save_series(ch.slug, d)
+    if idea_id:
+        seasons.plans_dir(ch.slug).joinpath(f"{idea_id}.json").unlink(missing_ok=True)
+    log.info("série apagada (%s): %s", ch.name, out)
+    return out

@@ -2,13 +2,13 @@
 // com status de cada parte, decisões A/B do público (votos dos comentários + enquete digitada) e a versão completa.
 import { useState } from 'react'
 import clsx from 'clsx'
-import { CheckCircle2, Clapperboard, Film, Loader2, Play, Sparkles, Vote } from 'lucide-react'
+import { CheckCircle2, Clapperboard, Film, Loader2, Play, Sparkles, Trash2, Vote } from 'lucide-react'
 import { api, invalidate, mediaUrl, useApi } from '../api'
 import { act, Skeleton } from '../ui'
 
 type Decision = { question: string; options: { A: string; B: string }; default: 'A' | 'B'; branches?: Record<string, string> }
 type PlanPart = { n: number; title: string; goal: string; obstacle?: string; twist?: string; cliffhanger: string; tip?: string; decision?: Decision | null }
-type Plan = { title: string; logline: string; genre: string; setting: string; real_history: boolean; mission: { title: string; hours?: number }
+type Plan = { title: string; logline: string; genre: string; setting: string; real_history: boolean; mode?: 'sequencial' | 'opcoes'; mission: { title: string; hours?: number }
   parts_count: number; parts: PlanPart[]; finale_tease?: string; newcomers?: { name: string; role: string }[] }
 type Votes = { comments: { A: number; B: number }; manual: { A: number; B: number }; total: { A: number; B: number }; voters: number }
 type SPart = PlanPart & { status: string; script_id?: number; video?: { id: number; status: string; thumbnail: string } | null
@@ -60,14 +60,19 @@ export function SeriesPlanCard({ channelId, ideaId }: { channelId: number; ideaI
 export function SeriesBoard({ channelId }: { channelId: number }) {
   const { data, isLoading } = useApi<{ dedicated: boolean; series: Serie[]; pending: { idea_id: number; title: string; status: string; plan: Plan }[]; vote_wait_hours: number }>(`/story/${channelId}/series`, { refetchInterval: 60_000 })
   const [busy, setBusy] = useState(false)
+  const [mode, setMode] = useState<'sequencial' | 'opcoes'>('opcoes')
   if (isLoading || !data) return <Skeleton className="h-60" />
-  const plan = () => { setBusy(true); act(() => api(`/story/${channelId}/series/new`, { body: { count: 2 } }), 'Planejando 2 séries novas…').finally(() => setBusy(false)) }
+  const plan = () => { setBusy(true); act(() => api(`/story/${channelId}/series/new`, { body: { count: 2, mode } }), `Planejando 2 séries ${mode === 'sequencial' ? 'sequenciais' : 'com opções A/B'}…`).finally(() => setBusy(false)) }
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <div className="text-[13px] text-muted flex-1">
           {data.dedicated ? `Canal de séries: cada pauta é uma série inteira; as partes saem em ordem nos horários do canal. Votação A/B fica aberta ~${data.vote_wait_hours}h depois da parte ir ao ar.`
             : 'Este canal não é dedicado ao Modo História (as séries planejadas valem só para canais dedicados).'}
+        </div>
+        <div className="seg" title="Sequencial: a história segue sozinha. Com opções: 1-2 escolhas A/B do público por série.">
+          {([['sequencial', 'Sequencial'], ['opcoes', 'Com opções A/B']] as const).map(([k, l]) =>
+            <button key={k} type="button" data-active={mode === k} onClick={() => setMode(k)}>{l}</button>)}
         </div>
         <button className="btn btn-sm" disabled={busy} onClick={plan}>{busy ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />} Planejar séries</button>
         <button className="btn btn-sm btn-ghost" onClick={() => act(() => api(`/story/${channelId}/series/tick`, { method: 'POST' }), 'Séries atualizadas').then(() => invalidate(`/story/${channelId}/series`))}>Atualizar agora</button>
@@ -82,13 +87,24 @@ export function SeriesBoard({ channelId }: { channelId: number }) {
                 <Film size={14} className="text-faint" />
                 <div className="flex-1 min-w-0"><b>{p.title}</b> <span className="text-muted">· {p.plan.parts_count} partes · {GENRE[p.plan.genre] ?? p.plan.genre}</span>
                   <div className="text-[12px] text-faint truncate">{p.plan.logline}</div></div>
+                <span className="badge">{p.plan.mode === 'sequencial' ? 'sequencial' : 'com opções'}</span>
                 <span className={clsx('badge', p.status === 'approved' && 'badge-ok')}>{p.status === 'approved' ? 'aprovada' : 'na fila'}</span>
+                <button className="btn btn-sm btn-ghost text-bad" title="Apagar esta pauta-série" onClick={() => deleteSerie(channelId, p.idea_id, p.title)}><Trash2 size={13} /></button>
               </div>))}
           </div>
         </section>)}
       {!data.series.length && !data.pending.length && <div className="card p-6 text-[13px] text-muted">Nenhuma série ainda — clique em “Planejar séries”.</div>}
     </div>
   )
+}
+
+/** Cancela tudo da série na fila e apaga do painel (o que já foi ao ar continua no YouTube). */
+export const deleteSerie = (cid: number, key: string | number, title: string) => {
+  if (!window.confirm(`Cancelar e apagar a série "${title}"?
+
+Para o que estiver na fila e apaga roteiros e vídeos que ainda não foram ao ar. Partes já publicadas continuam no YouTube.`)) return
+  act(() => api(`/story/${cid}/series/${key}`, { method: 'DELETE' }), 'Série cancelada e apagada')
+    .then(() => { invalidate(`/story/${cid}/series`); invalidate('/ideas'); invalidate('/videos'); invalidate('/jobs') })
 }
 
 function SerieCard({ cid, s }: { cid: number; s: Serie }) {
@@ -105,6 +121,7 @@ function SerieCard({ cid, s }: { cid: number; s: Serie }) {
           <span className={clsx('badge', s.status === 'closed' && 'badge-ok')}>{s.status === 'closed' ? 'terminada' : s.status === 'written' ? 'escrita' : 'em andamento'}</span>
           {s.status === 'closed' && !s.long && <button className="btn btn-sm" onClick={() => act(() => api(`/story/${cid}/arcs/${s.id}/long`, { method: 'POST' }), 'Versão completa na fila')}><Clapperboard size={13} /> Versão completa</button>}
           {s.long && <span className="badge badge-accent">versão completa #{s.long.script_id}</span>}
+          <button className="btn btn-sm btn-ghost text-bad" title="Cancelar e apagar a série" onClick={() => deleteSerie(cid, s.id, s.title)}><Trash2 size={13} /></button>
         </div>
       </div>
       <div className="divide-y divide-line">

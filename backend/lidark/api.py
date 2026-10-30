@@ -379,7 +379,7 @@ def create_idea(body: IdeaIn, s: Session = Depends(get_session)):
 def discover(data: dict[str, Any]):
     cid = data["channel_id"]
     j = jobs.enqueue("discover_ideas", title="Buscar pautas" + (f": {data['seed']}" if data.get("seed") else ""),
-                     channel_id=cid, payload={k: data.get(k) for k in ("count", "seed", "format", "campaign") if data.get(k)})
+                     channel_id=cid, payload={k: data.get(k) for k in ("count", "seed", "format", "campaign", "mode") if data.get(k)})
     return jobs.job_dict(j)
 
 

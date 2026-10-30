@@ -368,8 +368,12 @@ function NewIdeaModal({ open, onClose }: { open: boolean; onClose: () => void })
 
 function DiscoverModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { channel } = useChannel()
-  const [f, setF] = useState({ seed: '', count: 8, format: 'short' })
-  const submit = () => channel && act(() => api('/ideas/discover', { body: { ...f, channel_id: channel.id } }), 'Buscando pautas na internet…').then(onClose)
+  const [f, setF] = useState({ seed: '', count: 8, format: 'short', mode: 'opcoes' })
+  // canal só de histórias: cada pauta é uma série inteira — o dono escolhe se ela é sequencial ou com escolhas A/B
+  const { data: bible } = useApi<{ dedicated?: boolean; enabled?: boolean }>(channel ? `/story/${channel.id}/bible` : null)
+  const story = !!bible?.dedicated && bible?.enabled !== false
+  const submit = () => channel && act(() => api('/ideas/discover', { body: { ...f, count: story ? Math.min(3, f.count) : f.count, channel_id: channel.id } }),
+    story ? 'Planejando séries…' : 'Buscando pautas na internet…').then(onClose)
   return (
     <Modal open={open} onClose={onClose} title="Buscar pautas com IA">
       <div className="space-y-4">
@@ -386,7 +390,15 @@ function DiscoverModal({ open, onClose }: { open: boolean; onClose: () => void }
             </div>
           </Field>
         </div>
-        <button className="btn btn-primary btn-lg w-full" onClick={submit}><Sparkles size={16} /> Buscar</button>
+        {story && (
+          <Field label="Tipo de série" hint="Sequencial: a história segue sozinha, parte após parte. Com opções: 1 ou 2 momentos em que o público (ou você, pelos botões em Modo História → Séries) escolhe A ou B.">
+            <div className="seg w-full">
+              {[['sequencial', 'Sequencial'], ['opcoes', 'Com opções A/B']].map(([k, l]) => (
+                <button key={k} type="button" className="flex-1 justify-center" data-active={f.mode === k} onClick={() => setF({ ...f, mode: k })}>{l}</button>
+              ))}
+            </div>
+          </Field>)}
+        <button className="btn btn-primary btn-lg w-full" onClick={submit}><Sparkles size={16} /> {story ? 'Planejar séries' : 'Buscar'}</button>
       </div>
     </Modal>
   )

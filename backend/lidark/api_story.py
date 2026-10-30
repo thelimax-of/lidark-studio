@@ -254,8 +254,16 @@ def new_series(cid: int, data: Optional[dict[str, Any]] = None):
     _ch(cid)
     d = data or {}
     j = jobs.enqueue("story_series_ideas", title="Planejar séries", channel_id=cid,
-                     payload={"count": int(d.get("count") or 2), "seed": str(d.get("seed") or "")})
+                     payload={"count": int(d.get("count") or 2), "seed": str(d.get("seed") or ""),
+                              "mode": "sequencial" if d.get("mode") == "sequencial" else "opcoes"})
     return {"job_id": j.id}
+
+
+@router.delete("/{cid}/series/{key}")
+def delete_series(cid: int, key: str):
+    """Cancela e apaga uma série (key = id do arco, ex. serie_265, ou o id da pauta para série ainda não começada)."""
+    ch = _ch(cid)
+    return series.delete_series(ch, arc_id=key if not key.isdigit() else None, idea_id=int(key) if key.isdigit() else None)
 
 
 @router.post("/{cid}/series/{idea_id}/start")
