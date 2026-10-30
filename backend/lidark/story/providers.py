@@ -468,7 +468,8 @@ class LocalProvider(Provider):
             pass
 
 
-NEGATIVE = "text, letters, words, signature, watermark, logo, caption, frame border, photo, photorealistic, extra limbs, deformed"
+NEGATIVE = ("text, letters, words, signature, watermark, logo, caption, frame border, photo, photorealistic, extra limbs, deformed, "
+            "person, people, human, man, woman, face, portrait, crowd")  # pessoas só via bonecos/vultos do motor
 
 PROVIDERS: dict[str, Provider] = {
     "cf_lucid": CloudflareProvider("cf_lucid", "@cf/leonardo/lucid-origin", sized=True, steps=12),
@@ -547,7 +548,7 @@ def generate(prompt: str, w: int, h: int, seed: int, kind: str, *, only: list[st
     out = GEN_DIR / f"{key}.png"
     if out.exists():
         return out
-    order = list(only) if only else route(kind)  # only = fontes forçadas (comparações, worker local)
+    order = list(only) if only else route(kind)  # only = fontes forçadas (comparações, worker local, canal só-local)
     for name in order:
         p = PROVIDERS[name]
         try:

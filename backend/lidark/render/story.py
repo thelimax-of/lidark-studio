@@ -274,6 +274,11 @@ class FX:
                 px = int((140 + k * 130 + now * 14 * (1 + k % 2)) % (W + 200) - 200)
                 py = int(H * 0.64 - k * 90 - (now * 22 + k * 50) % 500)
                 base.alpha_composite(self.smoke[k % 3], (px, py))
+        if "fog" in fx:  # névoa: faixa clara que deriva devagar
+            g = self.glow().transpose(Image.FLIP_TOP_BOTTOM)
+            fogl = Image.new("RGBA", (W, H), (210, 215, 220, 0))
+            fogl.putalpha(g.getchannel("A").point(lambda v: int(v * 0.7)))
+            base.alpha_composite(fogl, (int(18 * math.sin(now * 0.3)), 0))
         if "rain" in fx:
             r = self.rain()
             off = int((now * 1400) % H)
@@ -454,6 +459,13 @@ class Renderer:
                     continue
             off_x = 0.0
             scale = 1.0
+            if ent in ("walk_l", "walk_r"):  # entra caminhando: 1,4 s atravessando, com passo
+                kw = (lt - t_in) / 1.4
+                if kw < 1:
+                    off_x = (1 - HUD.ease(kw)) * (-1 if ent == "walk_l" else 1) * W * 0.7
+                    bob_walk = abs(math.sin(kw * math.pi * 6)) * hgt * 0.025
+                    off_x += 0.0
+                    c = {**c, "_walkbob": bob_walk}
             if ent in ("slide_l", "slide_r") and k < 1:
                 off_x = (1 - HUD.back(k)) * (-1 if ent == "slide_l" else 1) * W * 0.6
             elif ent == "pop" and k < 1:
@@ -472,7 +484,7 @@ class Renderer:
             sway = float(c.get("sway", 0.0)) * math.sin(now * 1.1 + ph)
             # câmera
             sx = (X + off_x + sway - cx) * z + W / 2
-            sy = (Y + jump - cy) * z + H / 2 + bob
+            sy = (Y + jump - cy) * z + H / 2 + bob - float(c.get("_walkbob") or 0) * z
             ph_h = int(hgt * z * scale * breathe / 4) * 4  # quantiza p/ cache
             if ph_h < 8:
                 continue
@@ -498,6 +510,8 @@ class Renderer:
             if not (t0 <= now < t1):
                 continue
             lt, dur, typ, data = now - t0, t1 - t0, w["type"], w.get("data") or {}
+            if typ == "bag":
+                data = {**data, "_t0": t0}
             if typ == "highlight":
                 tgt = str(data.get("target", "char:0"))
                 HUD.highlight(h, base, lt, dur, data, (sh.get("_boxes") or {}).get(tgt))

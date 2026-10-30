@@ -195,9 +195,8 @@ def phone_screen(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[st
         d.text((sx0 + h.s(24), sy0 + h.s(72)), t, font=fit(t, h.f_ui, cw - h.s(40), h.s(20)), fill=(240, 240, 250), anchor="lm")
         y = sy0 + h.s(120)
         msgs = [m for m in (data.get("messages") or []) if isinstance(m, dict)][:4] or [{"audio": True}]
-        per = max(0.5, (dur - 0.5) / max(1, len(msgs)))
-        for i, m in enumerate(msgs):
-            if ease((lt - 0.2 - i * per * 0.5) / 0.25) <= 0:
+        for i, m in enumerate(msgs):  # todas as bolhas chegam enquanto o celular entra (antes da voz)
+            if ease((lt - 0.1 - i * 0.18) / 0.2) <= 0:
                 break
             me = bool(m.get("me"))
             bw = int(cw * 0.8)
@@ -211,7 +210,7 @@ def phone_screen(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[st
                 ax = x + h.s(36)
                 d.ellipse((ax - h.s(24), cy - h.s(24), ax + h.s(24), cy + h.s(24)), fill=(90, 160, 120, 255))
                 d.text((ax, cy), who, font=h.F("title", 26), fill=(255, 255, 255), anchor="mm")
-                start, total = 0.35, max(0.6, dur - 0.7)
+                start, total = 0.7, max(0.6, dur - 0.7 - 0.35)  # a voz começa 0,7 s depois do celular entrar
                 prog = min(1.0, max(0.0, (lt - start) / total))
                 playing = 0 < prog < 1
                 px = x + h.s(84)

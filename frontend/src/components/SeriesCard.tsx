@@ -120,6 +120,9 @@ function PartRow({ cid, arc, p }: { cid: number; arc: string; p: SPart }) {
   const savePoll = () => act(() => api(`/story/${cid}/arcs/${arc}/parts/${p.n}/poll`, { body: { A: Number(a) || 0, B: Number(b) || 0 } }), 'Enquete somada aos votos')
     .then(() => invalidate(`/story/${cid}/series`))
   const decideNow = () => act(() => api(`/story/${cid}/arcs/${arc}/parts/${p.n}/decide`, { method: 'POST' }), 'Votação encerrada').then(() => invalidate(`/story/${cid}/series`))
+  // botão do painel: escolhe o caminho e já gera a próxima parte (roteiro → imagens → vídeo)
+  const pick = (c: 'A' | 'B') => act(() => api(`/story/${cid}/arcs/${arc}/parts/${p.n}/decide`, { body: { choice: c, generate: true } }),
+    `Gerando a parte ${p.n + 1} com a opção ${c}…`).then(() => { invalidate(`/story/${cid}/series`); invalidate('/jobs') })
   return (
     <div className="p-3 flex gap-3 items-start">
       {p.video?.thumbnail ? <img src={mediaUrl(p.video.thumbnail)} alt="" className="w-10 aspect-[9/16] object-cover rounded bg-panel2" />
@@ -136,7 +139,17 @@ function PartRow({ cid, arc, p }: { cid: number; arc: string; p: SPart }) {
           <div className="mt-1.5 rounded-md border border-line2 p-2 text-[12px]">
             <div className="flex items-center gap-1.5"><Vote size={12} className="text-accent" /> {p.decision.question} — <b>A</b>: {p.decision.options.A} · <b>B</b>: {p.decision.options.B}</div>
             {p.votes && <div className="text-faint mt-1">Comentários A {p.votes.comments.A} × B {p.votes.comments.B} · enquete A {p.votes.manual.A} × B {p.votes.manual.B} · total A {p.votes.total.A} × B {p.votes.total.B}</div>}
-            {p.choice ? <div className="mt-1 text-ok">Escolha: {p.choice} ({p.decision.options[p.choice]}) · {p.decided_by === 'votos' ? 'pelos votos' : 'padrão do plano (poucos votos)'}</div>
+            {!p.choice && (
+              <div className="mt-2 grid sm:grid-cols-2 gap-2">
+                {(['A', 'B'] as const).map(c => (
+                  <button key={c} className="btn btn-sm justify-start text-left !h-auto py-1.5" onClick={() => pick(c)}
+                    title={`Escolher ${c} e gerar a parte ${p.n + 1}`}>
+                    <span className="badge badge-accent">{c}</span>
+                    <span className="flex-1 min-w-0"><span className="block text-[11px] text-faint">Gerar parte {p.n + 1} com</span><span className="block truncate">{p.decision!.options[c]}</span></span>
+                  </button>
+                ))}
+              </div>)}
+            {p.choice ? <div className="mt-1 text-ok">Escolha: {p.choice} ({p.decision.options[p.choice]}) · {p.decided_by === 'votos' ? 'pelos votos' : p.decided_by === 'painel' ? 'escolhida no painel' : 'padrão do plano (poucos votos)'}</div>
               : p.status === 'no ar' ? (
                 <div className="mt-1.5 flex flex-wrap items-center gap-2">
                   <span className="text-faint">Enquete da aba Posts:</span>

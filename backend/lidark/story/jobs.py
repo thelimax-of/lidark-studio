@@ -204,7 +204,9 @@ def _series_episode(ctx: JobContext, ch: Channel, b: dict) -> dict:
         block = S.series_block(arc, n, b2)
         arc_w = {**arc, "parts": [x for x in arc.get("parts") or [] if x["n"] < n]}
         ep = writer.write_episode(ch, b2, "short", idea=idea, topic=arc.get("topic", ""), arc=arc_w, plan=vplan, log=ctx.log,
-                                  series_block=block, research_ok=bool(plan_s.get("real_history")))
+                                  series_block=block, research_ok=bool(plan_s.get("real_history")) or bool(plan_s["parts"][n - 1].get("tip")),
+                                  research_query="" if plan_s.get("real_history") else
+                                  f"{plan_s['parts'][n - 1].get('tip')} dica defesa civil cruz vermelha como se preparar")
         cur = plan_s["parts"][n - 1]
         ep.update(part=n, title=f"{plan_s['title']} — Parte {n}", mission=plan_s["mission"], series_arc=arc["id"],
                   series_title=plan_s["title"], parts_total=plan_s["parts_count"], decision=cur.get("decision"),

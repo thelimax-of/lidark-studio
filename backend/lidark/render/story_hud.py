@@ -845,6 +845,53 @@ def endcard(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, An
     h.put(base, cd, (h.W - cd.width) / 2, h.H * (0.8 if h.vertical else 0.78) + (1 - a) * h.s(30), a)
 
 
+def bag(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, Any]) -> None:
+    """Mochila (canto superior direito): cada item pego entra como ícone redondo com 'pop' e o contador sobe."""
+    items = [i for i in data.get("items") or [] if isinstance(i, dict)]
+    now_abs = float(data.get("_t0", 0)) + lt
+    shown = [i for i in items if now_abs >= float(i["at"]) - 0.05]
+    if not shown:
+        return
+    a = ease(lt / 0.3) * (1 - ease((lt - (dur - 0.3)) / 0.3))
+    ic = h.s(64)
+    W = h.s(26) + len(shown) * (ic + h.s(8)) + h.s(10)
+    W = max(W, h.s(150))
+    c = Image.new("RGBA", (W, ic + h.s(56)), (0, 0, 0, 0))
+    d = ImageDraw.Draw(c)
+    d.rounded_rectangle((0, 0, W - 1, c.height - 1), h.s(14), fill=h.panel)
+    d.text((h.s(14), h.s(18)), f"MOCHILA  {len(shown)}/{len(items)}", font=h.F("ui", 16), fill=h.accent, anchor="lm")
+    for k, it in enumerate(shown):
+        kk = (now_abs - float(it["at"])) / 0.35
+        s = back(min(1.0, max(0.05, kk)))
+        icon_img = h.cached(("bagicon", it["img"], ic), lambda it=it: _round_icon(it["img"], ic))
+        if s < 0.999:
+            icon_img = icon_img.resize((max(1, int(ic * s)), max(1, int(ic * s))), Image.BILINEAR)
+        x = h.s(14) + k * (ic + h.s(8)) + (ic - icon_img.width) // 2
+        c.alpha_composite(icon_img, (int(x), h.s(34) + (ic - icon_img.height) // 2))
+    last = shown[-1]
+    if now_abs - float(last["at"]) < 1.6:  # nome do item que acabou de entrar
+        f = h.F("ui", 18)
+        lab = "+ " + str(last["label"])
+        tw = f.getlength(lab)
+        d2 = ImageDraw.Draw(base, "RGBA")
+        y0 = h.s(110) + c.height
+        d2.rounded_rectangle((h.W - tw - h.s(48), y0, h.W - h.s(24), y0 + h.s(34)), h.s(8), fill=h.accent + (int(255 * a),))
+        d2.text((h.W - h.s(36), y0 + h.s(17)), lab, font=f, fill=h.ink + (int(255 * a),), anchor="rm")
+    h.put(base, c, h.W - W - h.s(24), h.s(100) if h.vertical else h.s(22), a)
+
+
+def _round_icon(path: str, size: int) -> Image.Image:
+    im = Image.open(path).convert("RGB")
+    s = min(im.size)
+    im = im.crop(((im.width - s) // 2, (im.height - s) // 2, (im.width + s) // 2, (im.height + s) // 2)).resize((size, size), Image.LANCZOS)
+    m = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(m).ellipse((0, 0, size - 1, size - 1), fill=255)
+    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    out.paste(im, (0, 0), m)
+    ImageDraw.Draw(out).ellipse((1, 1, size - 2, size - 2), outline=(255, 201, 40, 255), width=3)
+    return out
+
+
 def choice(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, Any]) -> None:
     """Cartão de escolha do público: pergunta + A/B grandes + "COMENTA!" pulsando."""
     a = ease((lt - 0.1) / 0.35)
@@ -882,7 +929,7 @@ WIDGETS = {
     "mission": mission, "objectives": objectives, "newspaper": newspaper, "telegram": telegram, "console": console,
     "notebook": notebook, "radio": radio, "scoreboard": scoreboard, "tv": tv, "phone": phone, "chat": chat,
     "map": map_card, "inventory": inventory, "alert": alert, "countdown": countdown, "chip": chip, "endcard": endcard,
-    "choice": choice,
+    "choice": choice, "bag": bag,
 }
 # widgets que ocupam o centro da tela (escurecem o fundo um pouco para leitura)
 CENTER = {"mission", "newspaper", "telegram", "console", "notebook", "alert", "countdown"}

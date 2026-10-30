@@ -196,9 +196,19 @@ def silhouette(bg: Image.Image, x: float, feet: float, h: float, color: tuple = 
     """Vulto curvado ao longe (ameaça sem gore). Devolve a cena e a caixa do vulto (fração do quadro)."""
     out = bg.convert("RGB").copy()
     W, H = out.size
-    d = ImageDraw.Draw(out)
-    fh = H * h
+    fh = H * max(h, 0.24)  # pequeno demais vira "um carro" na rua escura
     cx, base = W * x, H * feet
+    # contorno de luz (atrás) para o vulto se destacar do fundo escuro
+    rim = Image.new("L", out.size, 0)
+    _vulto(ImageDraw.Draw(rim), cx, base, fh, 255)
+    rim = rim.filter(ImageFilter.MaxFilter(7)).filter(ImageFilter.GaussianBlur(3))
+    out.paste((205, 215, 200), (0, 0), rim.point(lambda v: int(v * 0.75)))
+    d = ImageDraw.Draw(out)
+    _vulto(d, cx, base, fh, color)
+    return out, [(cx - fh * 0.34) / W, (base - fh * 1.05) / H, (cx + fh * 0.27) / W, (base + 6) / H]
+
+
+def _vulto(d: ImageDraw.ImageDraw, cx: float, base: float, fh: float, color: Any) -> None:
     d.ellipse((cx - fh * 0.09, base - fh, cx + fh * 0.07, base - fh * 0.82), fill=color)
     d.polygon([(cx - fh * 0.14, base - fh * 0.84), (cx + fh * 0.1, base - fh * 0.82), (cx + fh * 0.12, base - fh * 0.4),
                (cx - fh * 0.12, base - fh * 0.42)], fill=color)
@@ -206,7 +216,6 @@ def silhouette(bg: Image.Image, x: float, feet: float, h: float, color: tuple = 
     d.line((cx + fh * 0.08, base - fh * 0.78, cx + fh * 0.22, base - fh * 0.6), fill=color, width=int(fh * 0.06))
     d.line((cx - fh * 0.07, base - fh * 0.42, cx - fh * 0.12, base), fill=color, width=int(fh * 0.07))
     d.line((cx + fh * 0.07, base - fh * 0.42, cx + fh * 0.1, base), fill=color, width=int(fh * 0.07))
-    return out, [(cx - fh * 0.32) / W, (base - fh * 1.02) / H, (cx + fh * 0.25) / W, (base + 4) / H]
 
 
 def restamp_eyes(img: Image.Image, meta: dict[str, Any]) -> tuple[Image.Image, dict[str, Any]]:

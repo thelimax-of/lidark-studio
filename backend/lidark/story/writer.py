@@ -138,13 +138,14 @@ def build_prompt(ch: Channel, b: dict[str, Any], fmt: str, *, topic: str, facts:
     allowed = [w for w in (b.get("hud") or {}).get("widgets") or [] if w in WIDGET_DOC]
     recent_w = use["widgets"][-14:]
     fresh = sorted(allowed, key=lambda w: (recent_w.count(w), rng.random()))
-    n_widgets = rng.randint(4, 6) if fmt == "short" else 14
+    n_widgets = (rng.randint(4, 6) + int(max(0, seconds - 60) / 15)) if fmt == "short" else 14
     from .bible import voice_for
     try:
         rp = int(str(voice_for(b, "narrador").get("rate") or "+0%").strip().rstrip("%"))
     except ValueError:
         rp = 0
-    lo, hi = _words(seconds, rp, 11 if fmt == "short" else int(seconds / 4.5))
+    n_beats = max(10, int(seconds / 4.8)) if fmt == "short" else int(seconds / 4.5)
+    lo, hi = _words(seconds, rp, n_beats)
     chars = "\n".join(f'  - id "{c["id"]}": {c["name"]} ({c.get("role", "")})' for c in b.get("characters") or [])
     poses = ", ".join(b.get("poses") or list(COMMON_POSES))
     part_n = (len(arc["parts"]) + 1) if arc else 1
@@ -192,7 +193,7 @@ PRAZO: "hours" (ou "minutes") SÓ quando a missão É um prazo e o título diz i
 O prazo precisa caber nos fatos (ex.: a revolta durou ~6 dias; 72h de sobrevivência no auge faz sentido).
 NÃO repita as missões recentes: {avoid_m}.
 ABERTURA ({opening}): a 1ª frase prende em 2 segundos — {'um impacto/cena no meio da ação' if opening == 'impact' else 'uma pergunta/situação que deixa o espectador curioso'}; o hook já diz o prazo/o perigo.
-TAMANHO: entre {lo} e {hi} palavras faladas no total (narração + falas), em {10 if fmt == 'short' else 40} a {13 if fmt == 'short' else 90} beats (cada beat com 6 a 16 palavras: uma ideia por beat, a imagem troca a cada beat).
+TAMANHO: entre {lo} e {hi} palavras faladas no total (narração + falas), em {n_beats - 2 if fmt == 'short' else 40} a {n_beats + 2 if fmt == 'short' else 90} beats (cada beat com 6 a 16 palavras: uma ideia por beat, a imagem troca a cada beat).
 Frases curtas, presente do indicativo, ritmo de trailer. 1 a 3 falas curtas de personagens (até 14 palavras cada).
 FIM: o último beat é o GANCHO (cliffhanger real do evento) + chamada curta para seguir o canal e ver a parte {part_n + 1}
 (ex.: "Segue o canal pra ver se o Zé sai dessa na parte {part_n + 1}.") — use "segue" ou "siga".
@@ -208,6 +209,11 @@ APARELHOS DA ÉPOCA (use 2 ou 3 no episódio, em beats diferentes, como momento 
 a fala do beat SAI do aparelho quando o speaker é o próprio aparelho — notícia, locutor, áudio de voz, pregão):
 {devices_doc}
 Nada de aparelho fora da época (em 1904 não existe TV nem celular). Nomes de jornais/rádios/âncoras são FICTÍCIOS.
+ITENS (OBRIGATÓRIO, pelo menos {max(5, n_beats // 2)} beats): o protagonista PEGA, GUARDA ou USA objetos concretos da história (mochila,
+lanterna, garrafas de água, enlatados, kit de primeiros socorros, rádio, chaves, mapa, velas, fita, apito, isqueiro,
+canivete... adequados à época/situação). No beat: "item": {{"name": "nome curto em português", "en": "object in english",
+"action": "pega|guarda|usa"}} e a fala menciona a ação. Itens diferentes em cada beat.
+CLIMA/LUZ por beat (opcional): "mood": "at night with a flashlight" | "under heavy rain" | "in thick fog" | "at dawn"...
 Outras deixas por beat (opcionais): "fx" (lista: dust, smoke, rain, fire, embers, candle, alarm, flash, night, stars,
 bubbles, confetti), "impact": true (batida forte), "chip": "etiqueta curta de contexto", "highlight": {{"label": "..."}}
 (caixa em volta do PERSONAGEM na tela; label = nome + estado, ex.: "ZÉ · SEM SAÍDA"), "objective_done": índice do objetivo cumprido, "time": horário da história ("07:40";
@@ -235,6 +241,9 @@ def normalize(data: dict[str, Any], b: dict[str, Any], fmt: str, max_words: int)
     for x in data.get("beats") or []:
         if not isinstance(x, dict) or not str(x.get("text") or "").strip():
             continue
+        hero = ((b.get("characters") or [{}])[0].get("name") or "").strip()
+        if hero:
+            x["text"] = re.sub(r"([Oo]) (usuário|personagem|protagonista|jogador)", lambda m: ("O " if m.group(1) == "O" else "o ") + hero, str(x["text"]))
         spk = str(x.get("speaker") or "narrador").strip().lower()
         if spk not in ids:
             spk = "narrador"
@@ -248,7 +257,7 @@ def normalize(data: dict[str, Any], b: dict[str, Any], fmt: str, max_words: int)
         if w and w.get("type") not in allowed_w:
             w = None
         beats.append({**{k: x[k] for k in ("emotion", "time", "impact", "pause", "chip", "highlight", "objective_done", "fx",
-                                           "chapter", "mission", "recap", "tip") if x.get(k) not in (None, "", [])},
+                                           "chapter", "mission", "recap", "tip", "item", "mood") if x.get(k) not in (None, "", [])},
                       "speaker": spk, "text": re.sub(r"\s+", " ", str(x["text"])).strip(),
                       "visual": {"kind": kind, "desc": str(v.get("desc") or "")[:400], "place": str(v.get("place") or "")[:60],
                                  "chars": [{"id": c["id"], "pose": str(c.get("pose") or "front")} for c in chars],
@@ -279,13 +288,14 @@ def normalize(data: dict[str, Any], b: dict[str, Any], fmt: str, max_words: int)
 
 def write_episode(ch: Channel, b: dict[str, Any], fmt: str = "short", *, idea: Idea | None = None, topic: str = "",
                   arc: dict[str, Any] | None = None, plan: dict[str, Any] | None = None, seconds: float | None = None,
-                  log=None, series_block: str = "", research_ok: bool = True) -> dict[str, Any]:
+                  log=None, series_block: str = "", research_ok: bool = True, research_query: str = "") -> dict[str, Any]:
     plan = plan or {}
     rng = random.Random(f"{ch.id}-{time.time()}")
     if seconds is None:
         seconds = float(plan.get("seconds") or 0) if fmt == "short" else (ch.long_minutes or 8) * 60
-        if fmt == "short":  # Modo História pede 45-60 s
-            seconds = max(45.0, min(60.0, seconds or rng.uniform(46, 58)))
+        if fmt == "short":  # Modo História: faixa da bíblia (ex.: Zé na Fuga [80, 100]) ou 45-60 s
+            lo_s, hi_s = (b.get("short_seconds") or [45, 60])[:2]
+            seconds = max(float(lo_s), min(float(hi_s), seconds or rng.uniform(lo_s + 1, hi_s - 2)))
     if arc and arc.get("idea_id") and idea is None:
         from ..db import session
         with session() as s:
@@ -298,7 +308,7 @@ def write_episode(ch: Channel, b: dict[str, Any], fmt: str = "short", *, idea: I
     try:
         if not research_ok:  # série de ficção: nada a pesquisar (as dicas reais são checadas depois)
             raise RuntimeError("ficção")
-        d = research.gather_dossier((idea.title if idea else topic)[:160], max_sources=4)
+        d = research.gather_dossier((research_query or (idea.title if idea else topic))[:160], max_sources=4)
         srcs = [{"title": x.get("title", ""), "url": x["url"]} for x in d.get("sources") or [] if x.get("url")]
         dossier = "\n\n".join(f"[{s['title']}] {s['text'][:1600]}" for s in d.get("sources") or [])
     except Exception as e:  # noqa: BLE001

@@ -168,7 +168,7 @@ MISSÃO DA SÉRIE (igual em todas as partes): {plan['mission']['title']}{(' — 
 TÍTULO: exatamente "{plan['title']} — Parte {n}".
 NÃO leia horários em voz alta (o relógio já aparece na tela): use "time" nos beats, não no texto."""]
     if cur.get("tip"):
-        lines.append(f'DICA REAL DESTA PARTE (verdadeira e segura): {cur["tip"]} — o beat que FALA a dica (não o que a anuncia) leva "tip": true.')
+        lines.append(f'DICA REAL DESTA PARTE (verdadeira e segura): {cur["tip"]} — use SÓ o que está no MATERIAL DE PESQUISA (sem número inventado); o beat que FALA a dica (não o que a anuncia) leva "tip": true.')
     if n >= 2:
         prev = _part(arc, n - 1) or {}
         lines.append("ABERTURA: o 1º beat é uma frase de recap começando com \"No episódio anterior…\" (marque \"recap\": true), "
@@ -286,7 +286,8 @@ def vote_wait_hours(ch: Channel) -> float:
     return max(6.0, min(20.0, 24.0 / slots * 2))
 
 
-def decide(ch: Channel, arc: dict[str, Any], n: int, force: bool = False) -> dict[str, Any] | None:
+def decide(ch: Channel, arc: dict[str, Any], n: int, force: bool = False, choice: str | None = None) -> dict[str, Any] | None:
+    """Fecha a decisão A/B da parte n: pelos votos, pelo padrão do plano ou pela escolha feita no painel (choice)."""
     p = _part(arc, n)
     if not p or not p.get("decision") or p.get("choice"):
         return None
@@ -294,7 +295,10 @@ def decide(ch: Channel, arc: dict[str, Any], n: int, force: bool = False) -> dic
         return None
     v = count_votes(ch, p)
     t = v["total"]
-    if v["voters"] >= MIN_VOTES and t["A"] != t["B"]:
+    picked = choice
+    if picked in ("A", "B"):  # botão do painel: o dono escolhe o caminho
+        choice, by = picked, "painel"
+    elif v["voters"] >= MIN_VOTES and t["A"] != t["B"]:
         choice, by = ("A" if t["A"] > t["B"] else "B"), "votos"
     else:
         choice, by = p["decision"].get("default", "A"), "padrão"

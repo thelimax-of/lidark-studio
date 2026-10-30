@@ -286,13 +286,21 @@ def set_poll(cid: int, arc_id: str, n: int, data: dict[str, Any]):
 
 
 @router.post("/{cid}/arcs/{arc_id}/parts/{n}/decide")
-def decide_now(cid: int, arc_id: str, n: int):
-    """Fecha a votação agora (sem esperar o prazo) e libera a próxima parte."""
+def decide_now(cid: int, arc_id: str, n: int, data: dict[str, Any] | None = None):
+    """Fecha a votação agora (sem esperar o prazo). Com {"choice": "A"|"B"} a escolha é a do painel; com
+    {"generate": true} já coloca a próxima parte na fila (roteiro → imagens → vídeo)."""
     ch = _ch(cid)
     a = series.get_arc(ch.slug, arc_id)
     if not a:
         raise HTTPException(404, "série não encontrada")
-    return series.decide(ch, a, n, force=True) or {"msg": "nada a decidir"}
+    data = data or {}
+    r = series.decide(ch, a, n, force=True, choice=data.get("choice")) or {"msg": "nada a decidir"}
+    if data.get("generate"):
+        from .jobs import enqueue
+        j = enqueue("story_episode", title=f"Modo História: {a.get('title')} — parte {n + 1}", channel_id=ch.id,
+                    payload={"series_mode": True, "auto_render": True})
+        r = {**r, "job_id": j.id}
+    return r
 
 
 @router.post("/{cid}/arcs/{arc_id}/long")

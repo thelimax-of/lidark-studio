@@ -17,7 +17,7 @@ from typing import Any
 from PIL import Image
 
 ALLOWED_FX = {"dust", "smoke", "rain", "fire", "embers", "flicker", "candle", "alarm", "flash", "stars", "bubbles",
-              "confetti", "night"}
+              "confetti", "night", "fog"}
 CENTER_WIDGETS = {"mission", "newspaper", "telegram", "console", "notebook", "alert", "countdown"}
 DEVICE_TYPES = {"tv", "radio", "phone", "comms", "monitor", "newsboy", "proclamation"}
 # um cartão "principal" por vez no centro da tela; os pequenos ficam em cantos fixos (relógio sempre no canto)
@@ -124,6 +124,8 @@ def direct(ep: dict[str, Any], visuals: list[dict[str, Any]], lines: list[dict[s
             typ, data = dev["type"], dict(dev.get("data") or {})
         if typ:
             t0 = s0 + (1.0 if (typ == "mission" and i == 0) else 0.05 if typ in ("mission", "newspaper", "alert", "countdown") else 0.15)
+            if typ == "phone":  # o aparelho entra 0,7 s antes da voz (a mensagem de voz começa a tocar junto com a fala)
+                t0 = max(0.0, ln["start"] - 0.7)
             t1 = max(s1, t0 + 2.4) if typ not in ("countdown",) else s1 + 0.2
             widgets.append({"type": typ, "t0": round(t0, 3), "t1": round(min(t1, total), 3), "data": data})
             if typ in ("mission", "alert", "newspaper", "countdown", "tv", "scoreboard"):
@@ -176,6 +178,17 @@ def direct(ep: dict[str, Any], visuals: list[dict[str, Any]], lines: list[dict[s
                     sfx.append({"t": ln["start"] + float(at), "kind": str(e["kind"]), "gain": float(e.get("gain", 0.5))})
         if b.get("crowd"):
             amb.append({"kind": "crowd", "t0": s0, "t1": s1})
+    # mochila/inventário: cada item pego/guardado entra como ícone (o close gerado do item) com contador
+    bag = []
+    for i, (v, ln) in enumerate(zip(visuals, L)):
+        it = (v or {}).get("item") if v else None
+        act = str((beats[i].get("item") or {}).get("action") or "pega") if isinstance(beats[i].get("item"), dict) else ""
+        if it and act in ("pega", "guarda"):
+            bag.append({"label": it["name"].upper()[:14], "img": it["file"], "at": round(ln["start"] + 0.8, 3)})
+            sfx.append({"t": ln["start"] + 0.8, "kind": "ding", "variant": len(bag) % 4, "gain": 0.25})
+    if bag:
+        widgets[:] = [w for w in widgets if w["type"] != "inventory"]
+        widgets.append({"type": "bag", "t0": bag[0]["at"] - 0.3, "t1": round(narration_end, 3), "data": {"items": bag}})
     for k, ta in done_at.items():
         sfx.append({"t": ta, "kind": "ding", "variant": k % 4, "gain": 0.3})
     # whoosh nos cortes entre falas (não em todos)
@@ -393,7 +406,8 @@ def _shot(v: dict[str, Any], framing: str, start: float, dur: float, W: int, H: 
             a = c["asset"]
             hfrac = float(c.get("h") or (0.6 if n == 1 else 0.52))
             x = float(c.get("x") or slots[j])
-            ent = c.get("enter") or ("none" if not first_in_beat else rng.choice(["none", "none", "slide_l" if x < 0.5 else "slide_r", "pop"]))
+            ent = c.get("enter") or ("none" if not first_in_beat else rng.choice(
+                ["none", "walk_l" if x < 0.5 else "walk_r", "slide_l" if x < 0.5 else "slide_r", "pop", "walk_r" if x < 0.5 else "walk_l"]))
             look = c.get("look") or ("right" if x < 0.45 and n > 1 else ("left" if x > 0.55 and n > 1 else ""))
             chars.append({"file": a["file"], "eyes": a.get("eyes"), "id": c.get("id", ""), "x": x, "y": float(c.get("y") or 0.97),
                           "h": hfrac, "flip": bool(c.get("flip")), "enter": ent, "t_in": 0.0, "look": look,
