@@ -193,9 +193,12 @@ def inspect(ch: Channel, sc: Script, video: Video) -> dict[str, Any]:
     narr = float(a.get("narration_end") or 0)
 
     # 1) duração
-    need = 60.0 if vertical else (ch.long_minutes or 6) * 60 * 0.85
-    checks.append(_check("Duração", "ok" if dur >= need else "fail",
-                         f"{dur:.0f}s (mínimo {need:.0f}s)"))
+    # Shorts não têm duração mínima (a faixa é testada pela variedade); só o teto de 3 min
+    if vertical:
+        checks.append(_check("Duração", "ok" if 8 <= dur <= 180 else "fail", f"{dur:.0f}s (Shorts: 8 s a 3 min)"))
+    else:
+        need = (ch.long_minutes or 6) * 60 * 0.85
+        checks.append(_check("Duração", "ok" if dur >= need else "fail", f"{dur:.0f}s (mínimo {need:.0f}s)"))
     # 2) encerramento
     tail = dur - narr if narr else 0
     # vídeo longo: tela final de 20 s para os elementos finais do YouTube (render/endcard.py) é esperada
