@@ -11,6 +11,7 @@ from . import jobs
 from .db import session
 from .models import Channel, Job, Script, Video
 from .story import bank, bible as B, gpu, jobs as story_jobs, providers, writer  # noqa: F401 (registra as tarefas story_*)
+from .story import seasons, series  # noqa: F401 (registra story_series_ideas)
 
 router = APIRouter(prefix="/api/story")
 
@@ -228,3 +229,79 @@ def close_arc(cid: int, arc_id: str):
             a["status"] = "closed"
     writer._save_series(ch.slug, d)
     return {"ok": True}
+
+
+# ================================================================ séries (canal dedicado)
+
+@router.get("/{cid}/series")
+def series_overview(cid: int):
+    ch = _ch(cid)
+    return {"dedicated": seasons.dedicated(ch), **series.overview(ch)}
+
+
+@router.get("/{cid}/plans/{idea_id}")
+def get_plan(cid: int, idea_id: int):
+    ch = _ch(cid)
+    p = seasons.load_plan(ch.slug, idea_id)
+    if not p:
+        raise HTTPException(404, "esta pauta não é uma série planejada")
+    arc = next((a for a in series.arcs(ch.slug) if a.get("idea_id") == idea_id), None)
+    return {"plan": p, "arc_id": arc["id"] if arc else None, "status": arc.get("status") if arc else "não começou"}
+
+
+@router.post("/{cid}/series/new")
+def new_series(cid: int, data: Optional[dict[str, Any]] = None):
+    _ch(cid)
+    d = data or {}
+    j = jobs.enqueue("story_series_ideas", title="Planejar séries", channel_id=cid,
+                     payload={"count": int(d.get("count") or 2), "seed": str(d.get("seed") or "")})
+    return {"job_id": j.id}
+
+
+@router.post("/{cid}/series/{idea_id}/start")
+def start_series(cid: int, idea_id: int):
+    """Produzir a pauta-série: abre o arco e escreve a parte 1 (as seguintes vêm em ordem pelo tick)."""
+    _ch(cid)
+    j = jobs.enqueue("story_episode", title="Modo História: começar série", channel_id=cid, ref_id=idea_id,
+                     payload={"series_mode": True, "idea_id": idea_id})
+    return {"job_id": j.id}
+
+
+@router.post("/{cid}/series/tick")
+def series_tick(cid: int):
+    ch = _ch(cid)
+    if not seasons.dedicated(ch):
+        raise HTTPException(400, "canal não é dedicado ao Modo História")
+    return series._tick_channel(ch)
+
+
+@router.post("/{cid}/arcs/{arc_id}/parts/{n}/poll")
+def set_poll(cid: int, arc_id: str, n: int, data: dict[str, Any]):
+    """Resultado da enquete da aba Posts digitado à mão (soma com os votos dos comentários)."""
+    ch = _ch(cid)
+    r = series.set_manual_poll(ch, arc_id, n, {"A": int(data.get("A") or 0), "B": int(data.get("B") or 0)})
+    if r is None:
+        raise HTTPException(404, "parte não encontrada")
+    return r
+
+
+@router.post("/{cid}/arcs/{arc_id}/parts/{n}/decide")
+def decide_now(cid: int, arc_id: str, n: int):
+    """Fecha a votação agora (sem esperar o prazo) e libera a próxima parte."""
+    ch = _ch(cid)
+    a = series.get_arc(ch.slug, arc_id)
+    if not a:
+        raise HTTPException(404, "série não encontrada")
+    return series.decide(ch, a, n, force=True) or {"msg": "nada a decidir"}
+
+
+@router.post("/{cid}/arcs/{arc_id}/long")
+def series_long(cid: int, arc_id: str):
+    ch = _ch(cid)
+    a = series.get_arc(ch.slug, arc_id)
+    if not a:
+        raise HTTPException(404, "série não encontrada")
+    sid = series.make_long(ch, a)
+    if not sid:
+        raise HTTPException(400, "a série ainda não tem todas as partes escritas")
+    return {"script_id": sid}

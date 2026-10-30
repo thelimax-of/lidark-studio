@@ -26,6 +26,9 @@ def _channel(cid: int) -> Channel:
 @handler("discover_ideas")
 def job_discover(ctx: JobContext) -> dict:
     ch = _channel(ctx.channel_id)
+    from .story import seasons as _seasons  # canal dedicado ao Modo História: pautas viram SÉRIES planejadas
+    if _seasons.dedicated(ch):
+        return _seasons.discover(ctx, ch)
     p = ctx.payload
     ctx.update(0.05, "Buscando inspiração na internet")
     from . import growth

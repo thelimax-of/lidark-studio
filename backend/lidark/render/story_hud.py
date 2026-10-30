@@ -845,10 +845,44 @@ def endcard(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, An
     h.put(base, cd, (h.W - cd.width) / 2, h.H * (0.8 if h.vertical else 0.78) + (1 - a) * h.s(30), a)
 
 
+def choice(h: Hud, base: Image.Image, lt: float, dur: float, data: dict[str, Any]) -> None:
+    """Cartão de escolha do público: pergunta + A/B grandes + "COMENTA!" pulsando."""
+    a = ease((lt - 0.1) / 0.35)
+    if a <= 0:
+        return
+    q, A, Bv = str(data.get("question") or "").upper(), str(data.get("A") or ""), str(data.get("B") or "")
+
+    def card() -> Image.Image:
+        W = h.W - h.s(90) if h.vertical else int(h.W * 0.5)
+        c = Image.new("RGBA", (W, h.s(330)), (0, 0, 0, 0))
+        d = ImageDraw.Draw(c)
+        d.rounded_rectangle((0, 0, W - 1, h.s(329)), h.s(20), fill=h.panel[:3] + (240,), outline=h.accent, width=h.s(3))
+        d.text((W / 2, h.s(30)), "VOCÊ DECIDE", font=h.F("ui", 18), fill=h.accent, anchor="mm")
+        fq = fit(q, h.f_title, W - h.s(50), h.s(40), h.s(18))
+        for i, ln in enumerate(wrap(q, fq, W - h.s(50))[:2]):
+            d.text((W / 2, h.s(72) + i * fq.size * 1.05), ln, font=fq, fill=(255, 255, 255), anchor="mm")
+        for k, (lab, txt) in enumerate((("A", A), ("B", Bv))):
+            x0 = h.s(20) + k * (W - h.s(40)) / 2 + h.s(6)
+            x1 = x0 + (W - h.s(40)) / 2 - h.s(12)
+            d.rounded_rectangle((x0, h.s(150), x1, h.s(300)), h.s(14), fill=(0, 0, 0, 150), outline=h.text, width=h.s(2))
+            d.ellipse(((x0 + x1) / 2 - h.s(30), h.s(160), (x0 + x1) / 2 + h.s(30), h.s(220)), fill=h.accent)
+            d.text(((x0 + x1) / 2, h.s(190)), lab, font=h.F("title", 40), fill=h.ink, anchor="mm")
+            ft = fit(txt.upper(), h.f_ui, x1 - x0 - h.s(16), h.s(24), h.s(12))
+            for i, ln in enumerate(wrap(txt.upper(), ft, x1 - x0 - h.s(16))[:2]):
+                d.text(((x0 + x1) / 2, h.s(245) + i * ft.size * 1.1), ln, font=ft, fill=h.text, anchor="mm")
+        return shadowed(c)
+    cd = h.cached(("choice", q, A, Bv), card)
+    y = place(h, data, 0.5, cd.height) + (1 - a) * h.s(40)
+    h.put(base, cd, (h.W - cd.width) / 2, y, a)
+    if int(lt * 2.5) % 2 == 0:
+        chip(h, base, 1.0, 9.0, {"text": "COMENTA  A  OU  B!", "y": (y + cd.height) / h.H + 0.005})
+
+
 WIDGETS = {
     "mission": mission, "objectives": objectives, "newspaper": newspaper, "telegram": telegram, "console": console,
     "notebook": notebook, "radio": radio, "scoreboard": scoreboard, "tv": tv, "phone": phone, "chat": chat,
     "map": map_card, "inventory": inventory, "alert": alert, "countdown": countdown, "chip": chip, "endcard": endcard,
+    "choice": choice,
 }
 # widgets que ocupam o centro da tela (escurecem o fundo um pouco para leitura)
 CENTER = {"mission", "newspaper", "telegram", "console", "notebook", "alert", "countdown"}

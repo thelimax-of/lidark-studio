@@ -163,7 +163,8 @@ def synth_lines(ch: Channel, b: dict[str, Any], beats: list[dict[str, Any]], wor
     for i, bt in enumerate(beats):
         role = bt.get("speaker", "narrador") or "narrador"
         p = paths[i]
-        af = DEVICE_AF.get(role)
+        dev = (bt.get("device") or {}).get("type") if isinstance(bt.get("device"), dict) else None
+        af = DEVICE_AF.get(role) or DEVICE_AF.get(dev or "")  # ex.: a Nina mandando áudio → voz dela com filtro de celular
         if af:
             q = p.with_name(p.stem + f"_{role}.wav")
             if not q.exists():
@@ -213,7 +214,7 @@ def produce_story(ch: Channel, sc: Script, video_id: int, ctx: Any) -> dict[str,
         if pr:
             por[c["id"]] = {**pr[0], "file": str(bank.file_path(ch.slug, pr[0]["file"]))}
     part = int(ep.get("part") or 1)
-    label = f"PARTE {part} · CONTINUA…"
+    label = ep.get("end_label") or f"PARTE {part} · CONTINUA…"  # série: final = "FIM DA SÉRIE · próxima: …"
     spec = director.direct(ep, visuals, lines, b, W=W, H=H, fps=30, seed=ep_no * 31 + part, part_label=label, portraits=por)
     (workdir / "story_spec.json").write_text(json.dumps({k: v for k, v in spec.items() if not k.startswith("_")}, ensure_ascii=False,
                                                        default=str), encoding="utf-8")
@@ -229,7 +230,8 @@ def produce_story(ch: Channel, sc: Script, video_id: int, ctx: Any) -> dict[str,
         spec["output_size"] = [1920, 1080]
     r = R.render(spec, out, workdir / "render", progress=lambda p: ctx.update(0.15 + 0.8 * p), check=ctx.check, music_bed=music_bed)
     ctx.log(f"Render: {r['frames']} quadros em {r['seconds']}s · {r['loudness'].get('measured_lufs')} → -14 LUFS")
-    thumb = R.thumbnail(spec, spec["hero_t"], ep.get("thumbnail_text") or sc.title, workdir / "thumb.jpg", part_label=f"PARTE {part}")
+    thumb = R.thumbnail(spec, spec["hero_t"], ep.get("thumbnail_text") or sc.title, workdir / "thumb.jpg",
+                        part_label=("SÉRIE COMPLETA" if ep.get("long_of_series") else f"PARTE {part}") if (part or ep.get("long_of_series")) else "")
     images = []
     for aid in dict.fromkeys(used):
         a = bank.get(ch.slug, aid) or {}

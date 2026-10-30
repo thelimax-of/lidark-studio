@@ -413,6 +413,9 @@ def seed_text(pub_id: int, style: str | None = None) -> tuple[str, str]:
         sc = s.get(Script, video.script_id) if video else None
     if not pub or not ch:
         return "", ""
+    from .story.series import vote_comment  # parte de série com decisão A/B: o comentário fixado é a votação
+    if sc is not None and (fixed := vote_comment(sc)):
+        return fixed, "escolha"
     fmt = video.format if video else ("short" if (pub.duration or 0) <= 70 else "long")
     title = (sc.title if sc else pub.title).replace("#Shorts", "").strip()
     body = (sc.full_text if sc else pub.description or "")[:3000]

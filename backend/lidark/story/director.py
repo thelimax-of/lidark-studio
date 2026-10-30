@@ -21,8 +21,8 @@ ALLOWED_FX = {"dust", "smoke", "rain", "fire", "embers", "flicker", "candle", "a
 CENTER_WIDGETS = {"mission", "newspaper", "telegram", "console", "notebook", "alert", "countdown"}
 DEVICE_TYPES = {"tv", "radio", "phone", "comms", "monitor", "newsboy", "proclamation"}
 # um cartão "principal" por vez no centro da tela; os pequenos ficam em cantos fixos (relógio sempre no canto)
-PRIMARY = CENTER_WIDGETS | DEVICE_TYPES | {"map", "chat", "dialogue"}
-PRIORITY = {"dialogue": 3, **{d: 2 for d in DEVICE_TYPES}}
+PRIMARY = CENTER_WIDGETS | DEVICE_TYPES | {"map", "chat", "dialogue", "choice"}
+PRIORITY = {"choice": 4, "dialogue": 3, **{d: 2 for d in DEVICE_TYPES}}
 EST_H = {"mission": 0.24, "newspaper": 0.36, "telegram": 0.22, "console": 0.3, "notebook": 0.32, "alert": 0.24,
          "countdown": 0.17, "map": 0.36, "chat": 0.32}
 DEFAULT_CY = {"mission": 0.68, "newspaper": 0.5, "telegram": 0.5, "console": 0.58, "notebook": 0.56, "alert": 0.6,
@@ -48,6 +48,7 @@ def direct(ep: dict[str, Any], visuals: list[dict[str, Any]], lines: list[dict[s
     ↔ lines[i] ({"audio", "dur", "speaker"})."""
     rng = random.Random(seed)
     beats = ep["beats"]
+    chars_ids = {c.get("id") for c in bible.get("characters") or []}
     hud = bible.get("hud") or {}
     portraits = portraits or {}
     vertical = H > W
@@ -134,7 +135,7 @@ def direct(ep: dict[str, Any], visuals: list[dict[str, Any]], lines: list[dict[s
             if typ == "comms":  # bipes de abrir/fechar o rádio (estilo controle de missão)
                 sfx.append({"t": max(0.0, ln["start"] - 0.25), "kind": "beep", "gain": 0.22})
                 sfx.append({"t": ln["end"] + 0.05, "kind": "beep", "gain": 0.18})
-            if typ == "phone" and ln["speaker"] == "phone":
+            if typ == "phone" and (ln["speaker"] == "phone" or ln["speaker"] in chars_ids):
                 sfx.append({"t": max(0.0, ln["start"] - 0.2), "kind": "beep", "gain": 0.2})
             if typ == "radio" and ln["speaker"] == "radio":
                 amb.append({"kind": "crackle", "t0": ln["start"], "t1": ln["end"]})
@@ -145,7 +146,8 @@ def direct(ep: dict[str, Any], visuals: list[dict[str, Any]], lines: list[dict[s
                 sfx.append({"t": t0 + 0.3, "t1": min(t1, t0 + 2.6), "kind": "typing"})
         # diálogo: toda fala de personagem ganha caixa com retrato + digitação
         spk = ln["speaker"]
-        if spk not in ("narrador", "narrator", "") and spk not in DEVICE_TYPES:
+        via_device = isinstance(b.get("device"), dict) and b["device"].get("type") in DEVICE_TYPES
+        if spk not in ("narrador", "narrator", "") and spk not in DEVICE_TYPES and not via_device:
             ch = next((c for c in bible.get("characters") or [] if c.get("id") == spk), None)
             por = portraits.get(spk) or {}
             widgets.append({"type": "dialogue", "t0": ln["start"], "t1": round(ln["end"] + 0.35, 3),
@@ -168,6 +170,10 @@ def direct(ep: dict[str, Any], visuals: list[dict[str, Any]], lines: list[dict[s
                 amb.append({"kind": "rain", "t0": s0, "t1": s1})
         if b.get("impact"):
             sfx.append({"t": s0 + 0.02, "kind": "impact", "variant": iv, "gain": 0.45})
+        for e in b.get("sfx") or []:  # efeitos pedidos pelo roteiro (ex.: batidas na porta) em tempos relativos à fala
+            if isinstance(e, dict) and e.get("kind"):
+                for at in (e.get("at") if isinstance(e.get("at"), list) else [e.get("at", 0.3)]):
+                    sfx.append({"t": ln["start"] + float(at), "kind": str(e["kind"]), "gain": float(e.get("gain", 0.5))})
         if b.get("crowd"):
             amb.append({"kind": "crowd", "t0": s0, "t1": s1})
     for k, ta in done_at.items():
@@ -183,6 +189,13 @@ def direct(ep: dict[str, Any], visuals: list[dict[str, Any]], lines: list[dict[s
     if climax:
         sfx.append({"t": max(0.0, climax - 1.3), "kind": "riser", "variant": 0, "gain": 0.22})
     sfx.append({"t": 0.05, "kind": "riser", "variant": 0, "gain": 0.18})
+    # decisão do público (A/B) no fim da parte: cartão de escolha na última fala, antes do selo
+    dec = ep.get("decision") if isinstance(ep.get("decision"), dict) else None
+    if dec and dec.get("options"):
+        t0c = max(L[-1]["start"] + 0.3, narration_end - 4.5)
+        widgets.append({"type": "choice", "t0": round(t0c, 3), "t1": round(total, 3),
+                        "data": {"question": dec.get("question", ""), "A": dec["options"].get("A", ""), "B": dec["options"].get("B", "")}})
+        sfx.append({"t": t0c + 0.1, "kind": "impact", "variant": iv, "gain": 0.4})
     # fim: selo "PARTE N · CONTINUA…"
     widgets.append({"type": "endcard", "t0": round(narration_end - 0.6, 3), "t1": total,
                     "data": {"text": part_label or "CONTINUA…", "sub": ep.get("end_sub", "")}})
@@ -314,6 +327,8 @@ def _clock(ep: dict[str, Any], beats: list[dict[str, Any]], L: list[dict[str, An
     cd = None
     try:
         cd = float(hours) * 60 if hours else (float(mission.get("minutes")) if mission.get("minutes") else None)
+        if cd is not None:  # série: o prazo continua de onde a parte anterior parou
+            cd = max(0.0, cd - float(c.get("elapsed_before") or 0))
     except (TypeError, ValueError):
         cd = None
     return {"mode": mode, "label": c.get("label", ""), "day_labels": c.get("day_labels") or [], "start_min": start,
@@ -333,6 +348,8 @@ def _highlight_target(hl: dict[str, Any], v: dict[str, Any] | None, bible: dict[
             if cid in ids:
                 return f"id:{cid}"
         return "char:0" if ids and not named and str(hl.get("target", "")).startswith("char") else None
+    if (v.get("bg") or {}).get("boxes") and str(hl.get("target", "")).startswith(("bg", "street", "box", "scene")):
+        return "bgbox:0"
     bg_char = (v.get("bg") or {}).get("char")
     if (v.get("bg") or {}).get("eyes") and bg_char and (bg_char in named or not named):
         return "face"
@@ -360,7 +377,8 @@ def _shot(v: dict[str, Any], framing: str, start: float, dur: float, W: int, H: 
           beat: dict[str, Any], speaker: str, first_in_beat: bool) -> dict[str, Any]:
     bg = v["bg"]
     SW, SH, s = _stage(bg["file"], W, H)
-    sh: dict[str, Any] = {"start": round(start, 3), "dur": round(dur, 3), "bg": {"file": bg["file"], "eyes": bg.get("eyes") if v.get("mode") != "layered" else None},
+    sh: dict[str, Any] = {"start": round(start, 3), "dur": round(dur, 3), "bg": {"file": bg["file"], "eyes": bg.get("eyes") if v.get("mode") != "layered" else None,
+                                                                              "boxes": bg.get("boxes") or []},
                           "fx": [f for f in (beat.get("fx") or []) if f in ALLOWED_FX], "impacts": [], "drift_zoom": rng.uniform(0.04, 0.08)}
     if beat.get("impact") and first_in_beat:
         sh["impacts"].append(0.05)

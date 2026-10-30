@@ -103,7 +103,16 @@ def wants_story(ch: Channel, fmt: str, idea: Idea | None = None) -> bool:
 
 
 def divert(ctx: JobContext, ch: Channel, idea: Idea | None, fmt: str) -> dict:
-    """Chamado pelo write_script: troca o roteiro normal por um episódio (mesmo auto_render/publish_at)."""
+    """Chamado pelo write_script: troca o roteiro normal por um episódio (mesmo auto_render/publish_at).
+    Canal dedicado: o horário de Short escreve a próxima parte da série certa; o de longo vira a versão completa."""
+    from . import seasons
+    if seasons.dedicated(ch) and fmt == "long":
+        from . import series as S
+        a = next((x for x in S.arcs(ch.slug) if x.get("status") == "closed" and not x.get("long")), None)
+        if a:
+            return {"long_script": S.make_long(ch, a, ctx.log)}
+        ctx.log("Canal de séries: o longo da semana é a versão completa de uma série terminada — nenhuma terminou ainda")
+        return {"msg": "sem série completa para o longo"}
     payload = {k: ctx.payload[k] for k in ("auto_render", "publish_at") if ctx.payload.get(k)}
     payload.update(format=fmt, idea_id=idea.id if idea else None)
     j = enqueue("story_episode", title=f"Modo História: {ch.name}", channel_id=ch.id, ref_id=idea.id if idea else None,
@@ -121,6 +130,9 @@ def job_story_episode(ctx: JobContext) -> dict:
     p = ctx.payload
     fmt = p.get("format") or "short"
     from .. import variety
+    from . import seasons
+    if fmt == "short" and (p.get("series_mode") or seasons.dedicated(ch)) and not p.get("topic"):
+        return _series_episode(ctx, ch, b)
     arc = None if (p.get("new_arc") or p.get("topic")) else writer.open_arc(ch.slug)
     idea = None
     iid = p.get("idea_id") or ctx.ref_id
@@ -172,7 +184,68 @@ def job_story_episode(ctx: JobContext) -> dict:
 
 
 
-def check_story_claims(ch: Channel, script_id: int, idea: Idea | None, log=print) -> dict:
+def _series_episode(ctx: JobContext, ch: Channel, b: dict) -> dict:
+    """Canal dedicado: escreve a PRÓXIMA parte da série certa (plano + memória real das partes anteriores)."""
+    from .. import variety
+    from . import series as S
+    cl = S.claim_next(ch, ctx.payload.get("idea_id") or ctx.ref_id)
+    if not cl:
+        motivos = "; ".join(f"{a['title']}: {S.blocked(a)}" for a in S.open_series(ch.slug)) or "sem pauta-série pronta"
+        ctx.log(f"Nada para escrever agora ({motivos})")
+        return {"msg": motivos}
+    arc, n = cl
+    plan_s = arc["plan"]
+    try:
+        b2 = S.bible_with_cast(b, arc)
+        with session() as s:
+            idea = s.get(Idea, arc["idea_id"]) if arc.get("idea_id") else None
+        ctx.update(0.1, f"Escrevendo “{plan_s['title']}” — parte {n} de {plan_s['parts_count']}")
+        vplan = variety.plan(ch, "short")
+        block = S.series_block(arc, n, b2)
+        arc_w = {**arc, "parts": [x for x in arc.get("parts") or [] if x["n"] < n]}
+        ep = writer.write_episode(ch, b2, "short", idea=idea, topic=arc.get("topic", ""), arc=arc_w, plan=vplan, log=ctx.log,
+                                  series_block=block, research_ok=bool(plan_s.get("real_history")))
+        cur = plan_s["parts"][n - 1]
+        ep.update(part=n, title=f"{plan_s['title']} — Parte {n}", mission=plan_s["mission"], series_arc=arc["id"],
+                  series_title=plan_s["title"], parts_total=plan_s["parts_count"], decision=cur.get("decision"),
+                  end_label=S.end_label(arc, n, ch), arc_title=plan_s["title"])
+        ep["clock"] = {**(ep.get("clock") or {}), "elapsed_before": float(arc.get("clock_elapsed") or 0)}
+        ctx.log(f"Parte {n}: {len(ep['beats'])} falas · {sum(len(x['text'].split()) for x in ep['beats'])} palavras"
+                + (f" · decisão A/B: {cur['decision']['question']}" if cur.get("decision") else ""))
+        story = {k: v for k, v in ep.items() if k != "beats"}
+        var = {**vplan, "structure": "historia", "series": plan_s["title"], "music_mood": "suspense dark cinematic", "loop": False,
+               "story": story}
+        with session() as s:
+            sc = Script(channel_id=ch.id, idea_id=idea.id if idea else None, format="short", title=ep["title"][:200],
+                        hook=ep["beats"][0]["text"], scenes=ep["beats"], description=ep.get("description") or "",
+                        tags=ep.get("tags") or [], hashtags=ep.get("hashtags") or [], thumbnail_text=ep.get("thumbnail_text") or "",
+                        sources=(idea.sources if idea and idea.sources else ep.get("sources") or []), variety=var, status="approved")
+            s.add(sc)
+            s.commit()
+            s.refresh(sc)
+        vc = S.vote_comment(sc)
+        if vc:
+            with session() as s:
+                db = s.get(Script, sc.id)
+                db.variety = {**(db.variety or {}), "pinned_comment": vc}
+                s.add(db)
+                s.commit()
+        if plan_s.get("real_history"):
+            ctx.update(0.55, "Checando os fatos (série de história real)")
+            check_story_claims(ch, sc.id, idea, ctx.log)
+        elif any(x.get("tip") for x in ep["beats"]):
+            ctx.update(0.55, "Checando a dica real de sobrevivência")
+            check_story_claims(ch, sc.id, idea, ctx.log, only_tips=True)
+        S.after_written(ch, arc, n, ep, sc.id)
+    except BaseException:
+        S.release(ch.slug, arc["id"])
+        raise
+    enqueue("story_assets", title=f"Imagens: {sc.title}", channel_id=ch.id, ref_id=sc.id,
+            payload={"auto_render": True, "series_part": True})
+    return {"script_id": sc.id, "series": plan_s["title"], "part": n}
+
+
+def check_story_claims(ch: Channel, script_id: int, idea: Idea | None, log=print, only_tips: bool = False) -> dict:
     """Checagem frase a frase só nas falas FACTUAIS (narrador e aparelhos: jornal, rádio, edital...). Falas de
     personagens ficcionais são moldura e não são "corrigidas" (antes o checador trocava "Dona Maria" por "alguém").
     A chamada final (segue/siga) é preservada mesmo quando a frase do gancho é corrigida."""
@@ -181,11 +254,25 @@ def check_story_claims(ch: Channel, script_id: int, idea: Idea | None, log=print
     with session() as s:
         sc = s.get(Script, script_id)
     chars = {c["id"] for c in B.load(ch.slug).get("characters") or []}
-    idx = [i for i, b in enumerate(sc.scenes or []) if b.get("speaker", "narrador") not in chars]
+    if only_tips:  # ficção: só a dica real (precisa ser verdadeira e segura)
+        tips = [i for i, b in enumerate(sc.scenes or []) if b.get("tip")]
+        # o roteirista às vezes marca a frase que ANUNCIA a dica: confere também a seguinte
+        idx = sorted({j for i in tips for j in (i, i + 1) if j < len(sc.scenes or []) and
+                      (sc.scenes[j].get("speaker", "narrador") not in chars or j == i)})
+    else:
+        idx = [i for i, b in enumerate(sc.scenes or []) if b.get("speaker", "narrador") not in chars]
     if not idx:
         return {}
+    srcs = sc.sources
+    if only_tips:
+        try:
+            from .. import research
+            q = " ".join(sc.scenes[i]["text"] for i in idx)[:160]
+            srcs = [{"title": x.get("title", ""), "url": x["url"]} for x in research.gather_dossier(q, max_sources=4)["sources"]]
+        except Exception:  # noqa: BLE001
+            srcs = []
     tmp = Script(channel_id=sc.channel_id, title=sc.title, scenes=[sc.scenes[i] for i in idx], variety=sc.variety,
-                 sources=sc.sources)
+                 sources=srcs)
     try:
         r = content.check_claims(ch, tmp, idea)
     except Exception as e:  # noqa: BLE001
@@ -248,7 +335,7 @@ def job_story_assets(ctx: JobContext) -> dict:
         s.commit()
     if ctx.payload.get("auto_render", True):
         enqueue("story_render", title=f"Vídeo (história): {sc.title}", channel_id=ch.id, ref_id=sc.id,
-                payload={k: ctx.payload[k] for k in ("publish_at",) if ctx.payload.get(k)})
+                payload={k: ctx.payload[k] for k in ("publish_at", "publish_long") if ctx.payload.get(k)})
     return {"new": pl["new"], "missing": len(missing)}
 
 
@@ -312,7 +399,24 @@ def job_story_render(ctx: JobContext) -> dict:
     except Exception as e:  # noqa: BLE001
         ctx.log(f"Inspetor falhou ({e}) — vídeo marcado para revisão")
         qa = {"passed": False}
-    if ctx.payload.get("publish_at"):
+    st = (sc.variety or {}).get("story") or {}
+    if st.get("series_arc") and not st.get("long_of_series"):
+        # parte de série: a agenda é sempre em ordem (a parte k nunca sai antes da k-1) — quem agenda é series.py
+        from . import series as S
+        if qa.get("passed"):
+            n = S.schedule_ready(ch, ctx.log)
+            ctx.log(f"Série: {n} parte(s) agendada(s) em ordem" if n else "Série: esperando a parte anterior ficar pronta para agendar")
+        else:
+            ctx.log("Parte REPROVADA no inspetor — a série espera você revisar em Vídeos (as próximas não passam na frente)")
+    elif ctx.payload.get("publish_long") or st.get("long_of_series"):
+        if qa.get("passed"):
+            from .. import posting_times
+            from ..models import now as _now
+            from ..pipeline import _schedule_publication
+            from datetime import timedelta
+            when = posting_times.next_free(ch, _now() + timedelta(hours=3), "long")
+            _schedule_publication(video.id, when.isoformat(), ctx)
+    elif ctx.payload.get("publish_at"):
         if qa.get("passed"):
             from ..pipeline import _schedule_publication
             _schedule_publication(video.id, ctx.payload["publish_at"], ctx)

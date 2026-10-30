@@ -130,7 +130,8 @@ def _words(seconds: float, rate_pct: int = 5, beats: int = 11) -> tuple[int, int
 
 
 def build_prompt(ch: Channel, b: dict[str, Any], fmt: str, *, topic: str, facts: list[str], dossier: str,
-                 arc: dict[str, Any] | None, plan: dict[str, Any], seconds: float, rng: random.Random) -> tuple[str, dict[str, Any]]:
+                 arc: dict[str, Any] | None, plan: dict[str, Any], seconds: float, rng: random.Random,
+                 series_block: str = "") -> tuple[str, dict[str, Any]]:
     use = recent_usage(b["slug"])
     style_opts = [k for k in EPISODE_STYLES if k not in use["styles"][-2:]] or list(EPISODE_STYLES)
     style = rng.choice(style_opts)
@@ -148,7 +149,7 @@ def build_prompt(ch: Channel, b: dict[str, Any], fmt: str, *, topic: str, facts:
     poses = ", ".join(b.get("poses") or list(COMMON_POSES))
     part_n = (len(arc["parts"]) + 1) if arc else 1
     prev = ""
-    if arc:
+    if arc and not series_block:
         prev = "\n".join(f"  Parte {p['n']}: {p.get('summary', '')} | GANCHO: {p.get('cliffhanger', '')}" for p in arc["parts"][-3:])
         prev = f"""
 ESTE EPISÓDIO CONTINUA O ARCO "{arc.get('title')}" — é a PARTE {part_n}. O que já aconteceu:
@@ -212,6 +213,7 @@ bubbles, confetti), "impact": true (batida forte), "chip": "etiqueta curta de co
 (caixa em volta do PERSONAGEM na tela; label = nome + estado, ex.: "ZÉ · SEM SAÍDA"), "objective_done": índice do objetivo cumprido, "time": horário da história ("07:40";
 no futebol, minuto do jogo "32"; no espaço, tempo de missão "55:54").
 {long_block}
+{series_block}
 Responda APENAS JSON:
 {{"title": "título chamativo com 'Parte {part_n}' no fim (até 70 caracteres)", "thumbnail_text": "2-4 palavras",
 "description": "2-3 frases + convite para a série", "hashtags": ["#..."], "tags": ["..."],
@@ -246,7 +248,7 @@ def normalize(data: dict[str, Any], b: dict[str, Any], fmt: str, max_words: int)
         if w and w.get("type") not in allowed_w:
             w = None
         beats.append({**{k: x[k] for k in ("emotion", "time", "impact", "pause", "chip", "highlight", "objective_done", "fx",
-                                           "chapter", "mission") if x.get(k) not in (None, "", [])},
+                                           "chapter", "mission", "recap", "tip") if x.get(k) not in (None, "", [])},
                       "speaker": spk, "text": re.sub(r"\s+", " ", str(x["text"])).strip(),
                       "visual": {"kind": kind, "desc": str(v.get("desc") or "")[:400], "place": str(v.get("place") or "")[:60],
                                  "chars": [{"id": c["id"], "pose": str(c.get("pose") or "front")} for c in chars],
@@ -277,7 +279,7 @@ def normalize(data: dict[str, Any], b: dict[str, Any], fmt: str, max_words: int)
 
 def write_episode(ch: Channel, b: dict[str, Any], fmt: str = "short", *, idea: Idea | None = None, topic: str = "",
                   arc: dict[str, Any] | None = None, plan: dict[str, Any] | None = None, seconds: float | None = None,
-                  log=None) -> dict[str, Any]:
+                  log=None, series_block: str = "", research_ok: bool = True) -> dict[str, Any]:
     plan = plan or {}
     rng = random.Random(f"{ch.id}-{time.time()}")
     if seconds is None:
@@ -294,13 +296,16 @@ def write_episode(ch: Channel, b: dict[str, Any], fmt: str = "short", *, idea: I
     dossier = ""
     srcs: list[dict[str, Any]] = []
     try:
+        if not research_ok:  # série de ficção: nada a pesquisar (as dicas reais são checadas depois)
+            raise RuntimeError("ficção")
         d = research.gather_dossier((idea.title if idea else topic)[:160], max_sources=4)
         srcs = [{"title": x.get("title", ""), "url": x["url"]} for x in d.get("sources") or [] if x.get("url")]
         dossier = "\n\n".join(f"[{s['title']}] {s['text'][:1600]}" for s in d.get("sources") or [])
     except Exception as e:  # noqa: BLE001
-        if log:
+        if log and research_ok:
             log(f"pesquisa extra falhou ({e}) — seguindo com os fatos da pauta")
-    prompt, meta = build_prompt(ch, b, fmt, topic=topic, facts=facts, dossier=dossier, arc=arc, plan=plan, seconds=seconds, rng=rng)
+    prompt, meta = build_prompt(ch, b, fmt, topic=topic, facts=facts, dossier=dossier, arc=arc, plan=plan, seconds=seconds, rng=rng,
+                                series_block=series_block)
     data = llm.complete_json(prompt, temperature=0.75, required=("beats", "title"), timeout=180)
     ep = normalize(data, b, fmt, meta["words"][1] + 8)
     ep.update(part=meta["part"], episode_style=meta["style"], seconds_target=round(seconds), words=meta["words"],

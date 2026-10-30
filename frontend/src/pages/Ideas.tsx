@@ -8,6 +8,7 @@ import clsx from 'clsx'
 import { api, invalidate, useApi, type Idea } from '../api'
 import { act, Empty, Field, Menu, Modal, PageHeader, ScoreRing, Status, Tabs, toast, useChannel } from '../ui'
 import { Bar, Callout, RowsSkeleton, useProgressive } from './kit'
+import { SeriesPlanCard } from '../components/SeriesCard'
 
 const TABS = [
   { k: 'new,approved', label: 'Na fila' },
@@ -284,6 +285,7 @@ function IdeaModal({ base, onClose }: { base: IdeaX; onClose: () => void }) {
               </div>
             </Block>
           )}
+          {idea.tags?.includes('serie') && <SeriesPlanCard channelId={idea.channel_id} ideaId={idea.id} />}
           {idea.score_reason && <Block label="Por que essa nota"><p className="text-sm text-text/80">{idea.score_reason}</p></Block>}
           {!!idea.score_breakdown?.improvements?.length && (
             <Block label="Como melhorar">

@@ -409,6 +409,13 @@ class Renderer:
         salt = i * 0.71
         base = self.crop(S, self.eye_mode(now, salt, sh["bg"].get("look", "")), bcx, bcy, bz).convert("RGBA")
         boxes: dict[str, tuple] = {}
+        for k, bb in enumerate(sh["bg"].get("boxes") or []):  # caixas do cenário (fração da imagem) → quadro
+            z = max(1.0, bz)
+            fx0 = (bb[0] * S.SW - bcx) * z + self.W / 2
+            fy0 = (bb[1] * S.SH - bcy) * z + self.H / 2
+            fx1 = (bb[2] * S.SW - bcx) * z + self.W / 2
+            fy1 = (bb[3] * S.SH - bcy) * z + self.H / 2
+            boxes[f"bgbox:{k}"] = (fx0, fy0, fx1, fy1)
         if layered:
             self.draw_chars(base, sh, lt, now, cx, cy, z, boxes)
         if sh["bg"].get("eyes") and not layered:
@@ -598,6 +605,12 @@ def _synth(kind: str, rng: np.random.Generator) -> np.ndarray:
         x = rng.standard_normal(n).astype(np.float32)
         x = np.convolve(x, np.ones(6) / 6, "same") * 0.12
         return x * np.minimum(1, np.arange(n) / (0.05 * SR)) * np.minimum(1, (n - np.arange(n)) / (0.2 * SR))
+    if kind == "knock":  # batida seca na porta de madeira
+        n = int(0.18 * SR)
+        t = np.arange(n) / SR
+        body = np.sin(2 * np.pi * 95 * t) * np.exp(-t / 0.035) + 0.5 * np.sin(2 * np.pi * 180 * t) * np.exp(-t / 0.02)
+        click = rng.standard_normal(n) * np.exp(-t / 0.004) * 0.4
+        return ((body + click) * 0.8).astype(np.float32)
     if kind == "notify":
         t = np.arange(int(0.35 * SR)) / SR
         f = np.where(t < 0.12, 1320, 1760)

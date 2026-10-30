@@ -6,6 +6,7 @@ import { BookOpen, Clapperboard, Cpu, Image as ImageIcon, Loader2, Play, Refresh
 import { api, invalidate, mediaUrl, onJob, useApi } from '../api'
 import { act, Empty, Field, PageHeader, SectionTitle, Skeleton, Tabs, ago, fmtDur, useChannel } from '../ui'
 import { Bar, Callout, StatTile } from './kit'
+import { SeriesBoard } from '../components/SeriesCard'
 
 type Cap = Record<string, any>
 type Overview = {
@@ -29,8 +30,8 @@ type Episode = { script_id: number; title: string; part: number; arc: string; mi
   video: { id: number; status: string; path: string; thumbnail: string; duration: number; qa?: boolean
     story?: { shots: number; new_images: number; reused: number; widgets: string[]; render_seconds: number } } | null }
 
-type Tab = 'episodios' | 'personagens' | 'banco' | 'biblia' | 'config'
-const STORY_JOBS = ['story_episode', 'story_assets', 'story_render', 'story_pregen', 'story_seed']
+type Tab = 'series' | 'episodios' | 'personagens' | 'banco' | 'biblia' | 'config'
+const STORY_JOBS = ['story_episode', 'story_assets', 'story_render', 'story_pregen', 'story_seed', 'story_series_ideas']
 
 export default function StoryMode() {
   const { channel } = useChannel()
@@ -63,6 +64,7 @@ export default function StoryMode() {
       {me && !me.ready && <Callout tone="warn" className="mb-4">{me.name}: {me.why}. A geração espera a cota da Cloudflare voltar (21:00) — ou configure a GPU local / um token do Hugging Face.</Callout>}
       {me?.open_arc && <Callout className="mb-4">Arco em andamento: <b>{me.open_arc.title}</b> — {me.open_arc.parts} de {me.open_arc.max} partes. O próximo episódio continua daqui.</Callout>}
       <Tabs value={tab} onChange={setTab} items={[
+        { key: 'series', label: 'Séries' },
         { key: 'episodios', label: 'Episódios', count: me?.episodes },
         { key: 'personagens', label: 'Personagens' },
         { key: 'banco', label: 'Banco de imagens', count: me?.bank.total },
@@ -71,6 +73,7 @@ export default function StoryMode() {
       ]} />
       <div className="mt-4">
         {!channel ? <Empty icon={<BookOpen size={18} />} title="Nenhum canal" /> :
+          tab === 'series' ? <SeriesBoard channelId={channel.id} /> :
           tab === 'episodios' ? <Episodes cid={channel.id} /> :
           tab === 'personagens' ? <Characters cid={channel.id} /> :
           tab === 'banco' ? <BankGrid cid={channel.id} /> :

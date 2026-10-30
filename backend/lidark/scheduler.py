@@ -250,5 +250,8 @@ def start() -> None:
                    "cron", hour=20, minute=15, id="story_pregen", max_instances=1, coalesce=True)
     _sched.add_job(lambda: enqueue("story_pregen", title="Modo História: folhas dos protagonistas", payload={"max": 12, "bootstrap": True}),
                    "cron", hour=21, minute=5, id="story_boot", max_instances=1, coalesce=True)
+    from .story import series as _series  # séries: votos, agenda em ordem, escrever adiante, longo semanal
+    _sched.add_job(_series.tick, "interval", minutes=20, id="story_series", max_instances=1, coalesce=True,
+                   next_run_time=datetime.now() + timedelta(minutes=4))
     _sched.start()
     log.info("agendador iniciado")

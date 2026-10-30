@@ -56,8 +56,11 @@ VOLUME_KINDS = {"location", "scene", "prop", "insert"}
 HERO_KINDS = {"sheet", "hero"}
 
 CONF_DEFAULTS: dict[str, Any] = {
-    "local_url": "",            # ex.: http://127.0.0.1:8790 (worker de GPU local)
-    "local_lock_client": True,  # o servidor segura a trava de GPU durante a chamada ao worker local
+    "local_url": "http://127.0.0.1:8770",  # worker de GPU local (lidark/story/gpu_worker.py no venv data/imggen/venv)
+    "local_autostart": True,    # sobe o worker sozinho quando precisa (e ele sai sozinho depois de ocioso)
+    "local_model": "sd15_lcm",  # sd15_lcm | sdxl_lightning
+    "local_idle": 240,          # segundos ocioso até o worker sair (libera VRAM/RAM)
+    "local_lock_client": False,  # o próprio worker segura a trava de GPU em cada geração
     "local_images_per_hour": 0,  # capacidade declarada (0 = pergunta ao worker em /capacity)
     "hf_token": "",
     "pollinations_token": "",
@@ -361,16 +364,18 @@ class PollinationsProvider(Provider):
 
 
 class LocalProvider(Provider):
-    """Worker de GPU local (outro processo). Contrato HTTP provisório — ajustar em _call quando o worker estiver pronto:
-        POST {local_url}/generate  json {prompt, negative, width, height, seed, kind, steps?} → image/png (bytes)
-             (ou json {"image": base64} / {"path": "C:/..."})
-        GET  {local_url}/capacity  → json {"ok": true, "images_per_hour": 120, "queue": 0}
-    A trava de GPU (gpu.py) é segurada aqui durante a chamada (conf local_lock_client=True); se o worker passar a
-    travar sozinho o mesmo arquivo, desligue local_lock_client para não haver espera dupla."""
+    """Worker de GPU local (outro processo, venv data/imggen/venv). Sobe sob demanda e sai sozinho quando ocioso.
+        POST {local_url}/generate  json {prompt, negative, width, height, seed, kind, model, init_image?, strength?} → PNG
+        GET  {local_url}/capacity  → {ok, model, loaded, secs_per_image, images_per_hour, queue}
+    O worker segura a trava de GPU (data/story/gpu.lock) em cada geração; o render espera."""
     name = "local"
+    _start_lock = threading.Lock()
 
     def _url(self) -> str:
         return (conf().get("local_url") or "").rstrip("/")
+
+    def _venv(self):
+        return DATA_DIR / "imggen" / "venv" / "Scripts" / "python.exe"
 
     def _probe(self) -> dict[str, Any] | None:
         u = self._url()
@@ -382,29 +387,68 @@ class LocalProvider(Provider):
         except (httpx.HTTPError, ValueError):
             return None
 
+    def _can_start(self) -> bool:
+        return bool(conf().get("local_autostart")) and self._venv().exists()
+
+    def ensure(self, model: str = "") -> bool:
+        """Sobe o worker se não estiver no ar (até ~60 s esperando a porta abrir)."""
+        if self._probe():
+            return True
+        if not self._can_start():
+            return False
+        import subprocess
+        with self._start_lock:
+            if self._probe():
+                return True
+            port = self._url().rsplit(":", 1)[-1] or "8770"
+            worker = Path(__file__).with_name("gpu_worker.py")
+            env = {**__import__("os").environ, "HF_HOME": str(DATA_DIR / "imggen" / "hf"), "PYTHONIOENCODING": "utf-8",
+                   "LIDARK_DATA": str(DATA_DIR)}
+            logf = open(STORY_DIR / "gpu_worker.log", "ab")
+            flags = 0x08000000 if __import__("os").name == "nt" else 0  # CREATE_NO_WINDOW
+            subprocess.Popen([str(self._venv()), str(worker), "--port", port, "--model", model or conf().get("local_model") or "sd15_lcm",
+                              "--idle", str(int(conf().get("local_idle") or 240))], env=env, stdout=logf, stderr=logf,
+                             creationflags=flags, cwd=str(worker.parent))
+            for _ in range(120):
+                time.sleep(0.5)
+                if self._probe():
+                    return True
+        return False
+
     def available(self) -> bool:
-        return self.enabled() and bool(self._url()) and bool(self._probe())
+        return self.enabled() and bool(self._url()) and (bool(self._probe()) or self._can_start())
 
     def capacity(self) -> dict[str, Any]:
         p = self._probe() or {}
         b = _ledger().get("local") or {}
         today = b.get("day") == datetime.now().strftime("%Y-%m-%d")
         iph = float(conf().get("local_images_per_hour") or p.get("images_per_hour") or 0)
-        return {"available": bool(p) and self.enabled(), "configured": bool(self._url()), "images_per_hour": iph,
-                "images_today": b.get("images", 0) if today else 0, "seconds_today": b.get("seconds", 0) if today else 0,
-                "queue": p.get("queue"), "images_per_day": int(iph * 20) if iph else None}
+        if not iph and self._can_start():
+            iph = {"sd15_lcm": 800, "sdxl_lightning": 120}.get(conf().get("local_model") or "sd15_lcm", 200)
+        return {"available": self.available(), "running": bool(p), "configured": bool(self._url()), "autostart": self._can_start(),
+                "model": p.get("model") or conf().get("local_model"), "secs_per_image": p.get("secs_per_image"),
+                "images_per_hour": iph, "images_today": b.get("images", 0) if today else 0,
+                "seconds_today": b.get("seconds", 0) if today else 0, "queue": p.get("queue"),
+                "images_per_day": int(iph * 20) if iph else None}
 
-    def run(self, prompt: str, w: int, h: int, seed: int, kind: str) -> Image.Image:
+    def run(self, prompt: str, w: int, h: int, seed: int, kind: str, init: Image.Image | None = None,
+            strength: float | None = None, model: str = "") -> Image.Image:
         u = self._url()
-        if not u:
-            raise Exhausted("worker local não configurado")
-        body = {"prompt": prompt, "negative": NEGATIVE, "width": int(w), "height": int(h), "seed": int(seed), "kind": kind}
+        model = model or conf().get("local_model") or "sd15_lcm"
+        if not u or not self.ensure(model):
+            raise Exhausted("worker local indisponível")
+        body: dict[str, Any] = {"prompt": prompt, "negative": NEGATIVE, "width": int(w), "height": int(h), "seed": int(seed),
+                                "kind": kind, "model": model}
+        if init is not None:
+            buf = io.BytesIO()
+            init.convert("RGB").save(buf, "PNG")
+            body.update(init_image=base64.b64encode(buf.getvalue()).decode(), strength=float(strength or 0.5))
         t0 = time.time()
 
         def call() -> httpx.Response:
-            return httpx.post(u + "/generate", json=body, timeout=600)
+            return httpx.post(u + "/generate", json=body, timeout=900)
 
-        if conf().get("local_lock_client", True):
+        if conf().get("local_lock_client"):
             from .gpu import gpu_lock
             with gpu_lock("image-local", timeout=1200):
                 r = call()
@@ -413,19 +457,15 @@ class LocalProvider(Provider):
         if r.status_code != 200:
             record(self.name, failed=True)
             raise RuntimeError(f"worker local {r.status_code}: {r.text[:200]}")
-        if r.headers.get("content-type", "").startswith("image/"):
-            img = _png(r.content)
-        else:
-            data = r.json()
-            if data.get("image"):
-                img = _png(base64.b64decode(data["image"]))
-            elif data.get("path"):
-                img = Image.open(data["path"])
-                img.load()
-            else:
-                raise RuntimeError("worker local sem imagem")
-        record(self.name, images=1, seconds=time.time() - t0)
+        img = _png(r.content)
+        record(self.name, images=1, seconds=time.time() - t0, model=model)
         return img
+
+    def stop(self) -> None:
+        try:
+            httpx.post(self._url() + "/shutdown", timeout=3)
+        except httpx.HTTPError:
+            pass
 
 
 NEGATIVE = "text, letters, words, signature, watermark, logo, caption, frame border, photo, photorealistic, extra limbs, deformed"
@@ -497,15 +537,17 @@ def _rephrase(prompt: str) -> str:
 
 
 def generate(prompt: str, w: int, h: int, seed: int, kind: str, *, only: list[str] | None = None,
-             log_fn=None) -> Path | None:
+             log_fn=None, init: Image.Image | None = None, strength: float | None = None, model: str = "",
+             tag: str = "") -> Path | None:
     """Gera UMA imagem na melhor fonte disponível para o tipo. Nunca levanta exceção: None = sem cota/sem fonte.
     O arquivo sai em data/story/_gen/<hash>.png, com metadados em <hash>.json (fonte, modelo, prompt, semente)."""
     GEN_DIR.mkdir(parents=True, exist_ok=True)
-    key = hashlib.sha1(f"{prompt}|{w}x{h}|{seed}|{kind}".encode()).hexdigest()[:20]
+    ih = hashlib.sha1(init.tobytes()).hexdigest()[:10] if init is not None else ""
+    key = hashlib.sha1(f"{prompt}|{w}x{h}|{seed}|{kind}|{ih}|{strength}|{model}|{tag}".encode()).hexdigest()[:20]
     out = GEN_DIR / f"{key}.png"
     if out.exists():
         return out
-    order = [p for p in route(kind) if (only is None or p in only)]
+    order = list(only) if only else route(kind)  # only = fontes forçadas (comparações, worker local)
     for name in order:
         p = PROVIDERS[name]
         try:
@@ -517,10 +559,16 @@ def generate(prompt: str, w: int, h: int, seed: int, kind: str, *, only: list[st
         for attempt in range(3):
             try:
                 t0 = time.time()
-                img = p.run(pr, w, h, seed + attempt * 7919, kind)
+                if name == "local":
+                    img = p.run(pr, w, h, seed + attempt * 7919, kind, init=init, strength=strength, model=model)
+                elif init is not None:
+                    break  # img2img só no worker local
+                else:
+                    img = p.run(pr, w, h, seed + attempt * 7919, kind)
                 img.save(out)
                 out.with_suffix(".json").write_text(json.dumps({
-                    "provider": name, "model": getattr(p, "model", name), "prompt": pr, "seed": seed + attempt * 7919,
+                    "provider": name, "model": (model or conf().get("local_model")) if name == "local" else getattr(p, "model", name),
+                    "prompt": pr, "seed": seed + attempt * 7919, "img2img": init is not None, "strength": strength,
                     "kind": kind, "size": list(img.size), "asked": [w, h], "secs": round(time.time() - t0, 1),
                     "at": datetime.now(timezone.utc).isoformat()}, ensure_ascii=False), encoding="utf-8")
                 if log_fn:
