@@ -226,6 +226,9 @@ Responda APENAS JSON:
 "arc_title": "nome do arco (o evento)", "mission": {{"title": "...", "subtitle": "lugar, mês e ano", "hours": 72}},
 "clock": {{"start": "06:00", "day_labels": ["QUI 10/11/1904"]}}, "objectives": ["3 objetivos curtos"],
 "beats": [{{"speaker": "narrador", "text": "...", "emotion": "tensao", "visual": {{...}}, "widget": {{"type": "mission", "data": {{}}}}}}],
+REGRA DO "text": é SEMPRE algo FALADO em voz alta (narração ou fala). NUNCA descreva sons no texto ("chiado", "som de",
+"barulho de", "estática", "bipe", "[ruído]"). Para um aparelho só chiar/apitar, use "text": "" e "sfx": "static" | "beep" |
+"knock" | "alarm" (o motor toca o som, sem voz).
 "cliffhanger": "o gancho em 1 frase", "memory": "resumo do que aconteceu (2 frases) para a próxima parte",
 "next_hook": "o que a próxima parte vai mostrar", "facts": ["cada afirmação factual usada, com data/nome"]}}"""
     return prompt, {"style": style, "part": part_n, "words": [lo, hi]}
@@ -233,14 +236,25 @@ Responda APENAS JSON:
 
 # ================================================================ normalização
 
+# "falas" que na verdade descrevem um som (a IA às vezes escreve "Chiado estático no rádio…"): viram efeito, sem voz
+_SOUND_CUE = re.compile(r"^\s*(?:[\[\(\*]|(?:chiado|chiados|est[aá]tica|ru[ií]do|interfer[eê]ncia|som de|sons de|barulho de|"
+                        r"bipe|bip|apito|zumbido|sil[eê]ncio no r[aá]dio|sinal fraco))", re.I)
+_SFX_ONLY = {"static", "beep", "knock", "alarm"}
+
+
 def normalize(data: dict[str, Any], b: dict[str, Any], fmt: str, max_words: int) -> dict[str, Any]:
     devs = set((b.get("hud") or {}).get("devices") or [])
     ids = {c["id"] for c in b.get("characters") or []} | ({"tv", "radio", "phone", "comms", "newsboy", "proclamation"} & devs)
     allowed_w = set((b.get("hud") or {}).get("widgets") or []) | {"mission", "objectives", "endcard"}
     beats = []
     for x in data.get("beats") or []:
-        if not isinstance(x, dict) or not str(x.get("text") or "").strip():
+        if not isinstance(x, dict) or not (str(x.get("text") or "").strip() or x.get("sfx") in _SFX_ONLY):
             continue
+        if _SOUND_CUE.match(str(x["text"])) or str(x.get("sfx") or "") in _SFX_ONLY and len(str(x["text"]).split()) < 3:
+            low = str(x["text"]).lower()
+            x["silent"] = True
+            x["sfx"] = x.get("sfx") if x.get("sfx") in _SFX_ONLY else ("beep" if "bip" in low else "knock" if ("bat" in low or "porta" in low)
+                                                                    else "alarm" if ("alarme" in low or "sirene" in low) else "static")
         hero = ((b.get("characters") or [{}])[0].get("name") or "").strip()
         if hero:
             x["text"] = re.sub(r"([Oo]) (usuário|personagem|protagonista|jogador)", lambda m: ("O " if m.group(1) == "O" else "o ") + hero, str(x["text"]))
@@ -257,7 +271,7 @@ def normalize(data: dict[str, Any], b: dict[str, Any], fmt: str, max_words: int)
         if w and w.get("type") not in allowed_w:
             w = None
         beats.append({**{k: x[k] for k in ("emotion", "time", "impact", "pause", "chip", "highlight", "objective_done", "fx",
-                                           "chapter", "mission", "recap", "tip", "item", "mood") if x.get(k) not in (None, "", [])},
+                                           "chapter", "mission", "recap", "tip", "item", "mood", "silent", "sfx") if x.get(k) not in (None, "", [])},
                       "speaker": spk, "text": re.sub(r"\s+", " ", str(x["text"])).strip(),
                       "visual": {"kind": kind, "desc": str(v.get("desc") or "")[:400], "place": str(v.get("place") or "")[:60],
                                  "chars": [{"id": c["id"], "pose": str(c.get("pose") or "front")} for c in chars],

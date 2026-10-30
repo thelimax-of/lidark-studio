@@ -148,6 +148,14 @@ def direct(ep: dict[str, Any], visuals: list[dict[str, Any]], lines: list[dict[s
                 sfx.append({"t": t0 + 0.3, "t1": min(t1, t0 + 2.6), "kind": "typing"})
         # diálogo: toda fala de personagem ganha caixa com retrato + digitação
         spk = ln["speaker"]
+        if ln.get("silent"):  # sem voz: o aparelho só chia/apita, ou a porta bate
+            k = ln.get("sfx") or "static"
+            if k == "static":
+                amb.append({"kind": "crackle", "t0": ln["start"], "t1": ln["end"]})
+                amb.append({"kind": "static", "t0": ln["start"], "t1": ln["start"] + 0.8})
+            else:
+                sfx.append({"t": ln["start"] + 0.1, "kind": {"beep": "beep", "knock": "knock", "alarm": "impact"}.get(k, "beep"), "gain": 0.5})
+            continue
         via_device = isinstance(b.get("device"), dict) and b["device"].get("type") in DEVICE_TYPES
         if spk not in ("narrador", "narrator", "") and spk not in DEVICE_TYPES and not via_device:
             ch = next((c for c in bible.get("characters") or [] if c.get("id") == spk), None)

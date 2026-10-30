@@ -123,6 +123,12 @@ def synth_lines(ch: Channel, b: dict[str, Any], beats: list[dict[str, Any]], wor
     paths: dict[int, Path] = {}
     roles: dict[str, list[int]] = {}
     for i, bt in enumerate(beats):
+        if bt.get("silent"):  # aparelho só chia/apita: sem voz, só o tempo do efeito (o diretor põe o som)
+            p = d / f"{i:02d}_silencio.wav"
+            if not p.exists():
+                run_ffmpeg(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-t", "1.8", str(p)])
+            paths[i] = p
+            continue
         roles.setdefault(bt.get("speaker", "narrador") or "narrador", []).append(i)
     def _path(i: int, cfg: dict[str, Any]) -> Path:
         bt = beats[i]
@@ -163,6 +169,9 @@ def synth_lines(ch: Channel, b: dict[str, Any], beats: list[dict[str, Any]], wor
     for i, bt in enumerate(beats):
         role = bt.get("speaker", "narrador") or "narrador"
         p = paths[i]
+        if bt.get("silent"):
+            out.append({"audio": str(p), "dur": 1.8, "speaker": role, "voice": {}, "silent": True, "sfx": bt.get("sfx") or "static"})
+            continue
         dev = (bt.get("device") or {}).get("type") if isinstance(bt.get("device"), dict) else None
         af = DEVICE_AF.get(role) or DEVICE_AF.get(dev or "")  # ex.: a Nina mandando áudio → voz dela com filtro de celular
         if af:
