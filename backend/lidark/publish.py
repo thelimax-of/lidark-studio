@@ -54,7 +54,7 @@ def _yt_flow(state: str | None = None):
 def _yt_start(channel_id: int | None) -> dict:
     state = secrets.token_urlsafe(16)
     flow = _yt_flow(state)
-    url, _ = flow.authorization_url(access_type="offline", prompt="consent", include_granted_scopes="true")
+    url, _ = flow.authorization_url(access_type="offline", prompt="consent")  # sem include_granted_scopes: o Google recusa juntar YouTube + Drive (backup) no mesmo pedido
     _pending[state] = {"platform": "youtube", "channel_id": channel_id, "verifier": getattr(flow, "code_verifier", None)}
     return {"auth_url": url}
 
