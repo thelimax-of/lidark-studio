@@ -70,7 +70,10 @@ def fetch_comments(ch: Channel, ctx: JobContext | None = None) -> int:
             for c in new:
                 s.add(c)
             s.commit()
-        suggest_replies(ch, ctx)
+        try:
+            suggest_replies(ch, ctx)
+        except Exception as e:  # noqa: BLE001
+            log.warning("sugestão de resposta (%s): %s", ch.name, e)
         try:  # perguntas do público viram pautas ("respondendo @fulano")
             ideas_from_comments(ch, ctx)
         except Exception as e:  # noqa: BLE001
@@ -101,10 +104,12 @@ def _dt(iso: str | None) -> datetime | None:
         return None
 
 
-def suggest_replies(ch: Channel, ctx: JobContext | None = None) -> None:
+def suggest_replies(ch: Channel, ctx: JobContext | None = None, only: int | None = None) -> None:
     with session() as s:
-        pending = s.exec(select(Comment).where(Comment.channel_id == ch.id, Comment.status == "new",
-                                               Comment.suggestion == "").limit(20)).all()
+        q = select(Comment).where(Comment.channel_id == ch.id, Comment.status == "new", Comment.suggestion == "")
+        if only:
+            q = q.where(Comment.id == only)
+        pending = s.exec(q.limit(20)).all()
     if not pending:
         return
     from .content import channel_brief
@@ -124,6 +129,7 @@ COMENTÁRIOS:
 
 Responda JSON: {{"items": [{{"i": 0, "kind": "pergunta|elogio|correcao|sugestao|critica|spam|outro", "reply": "..."}}]}}""",
                              temperature=0.6)
+    data = getattr(data, "data", data)
     by_i = {int(x.get("i", -1)): x for x in (data.get("items", []) if isinstance(data, dict) else [])}
     with session() as s:
         for i, c in enumerate(pending):
@@ -270,6 +276,10 @@ def job_fetch_comments(ctx: JobContext) -> dict:
                 total += fetch_comments(ch, ctx)
             except Exception as e:  # noqa: BLE001
                 ctx.log(f"{ch.name}: {e}")
+            try:  # refaz o que ficou sem sugestão: a IA pode ter falhado quando o comentário chegou
+                suggest_replies(ch, ctx)
+            except Exception as e:  # noqa: BLE001
+                ctx.log(f"{ch.name}: sugestão de resposta falhou: {e}")
     return {"new": total}
 
 

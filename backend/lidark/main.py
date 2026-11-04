@@ -62,6 +62,7 @@ app.include_router(__import__("lidark.api_growth", fromlist=["router"]).router) 
 app.include_router(__import__("lidark.api_learning", fromlist=["router"]).router)  # aprendizado (o que o sistema aprendeu)
 app.include_router(__import__("lidark.api_publish2", fromlist=["router"]).router)  # cota YouTube, idiomas, legendas, checklist, aprovação
 app.include_router(__import__("lidark.api_story", fromlist=["router"]).router)  # Modo História (registra as tarefas story_*)
+app.include_router(__import__("lidark.api_construcao", fromlist=["router"]).router)  # motor 3D do Parte por Parte
 app.mount("/media", StaticFiles(directory=MEDIA_DIR), name="media")
 app.mount("/fonts", StaticFiles(directory=FONTS_DIR), name="fonts")
 

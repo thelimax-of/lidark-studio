@@ -1,0 +1,15 @@
+{"id": "internet", "tema": "a internet da cidade", "voz": "pt-BR-ThalitaMultilingualNeural", "rate": "+8%", "zoom": 1, "cauda": 5, "destaque": ["backbone", "vala", "ponto", "nobreak", "OLT", "rede", "caixa", "modem", "Wi-Fi", "anel"],
+"falas": [
+"Se você ligar um roteador numa cidade sem internet, ele acende, mas não fala com ninguém.",
+"Porque a internet do mundo chega pelo mar, em cabos no fundo do oceano. Então você compra um pedaço dessa conexão, que corre da praia até a capital. Esse é o backbone.",
+"Mas o backbone passa longe da sua cidade. Então você abre uma vala na estrada, desce um tubo com a fibra, cobre com areia, fita de aviso e terra. Essa é a rota de fibra.",
+"Mas a luz da fibra precisa ser organizada. Então você aluga uma sala e enche de computadores potentes. Esse é o provedor.",
+"Mas se faltar energia, a cidade inteira fica sem internet. Então você instala baterias e um gerador. Esse é o nobreak.",
+"Mas uma fibra só não chega em mil casas. Então você liga um aparelho que divide a luz para cada bairro. Essa é a OLT.",
+"Agora a fibra sai pelos postes, rua por rua. Mas o cabo pesa e arria no meio. Então você estica e prende com ferragens em cada poste. Essa é a rede aérea.",
+"Mas cada casa precisa da própria fibra. Então você pendura no poste uma caixinha que reparte o sinal. Essa é a caixa de atendimento.",
+"Mas seu celular não entende luz. Então um fio fino entra na casa e chega num aparelho que transforma luz em internet. Esse é o modem.",
+"Mas o fio não alcança o celular. Então o roteador espalha a internet em ondas de rádio pela casa. Esse é o Wi-Fi.",
+"E se uma máquina cortar a fibra? Então você fecha o caminho em círculo, e a luz dá a volta pelo outro lado. Esse é o anel.",
+"Parabéns, você construiu a internet da sua cidade! Agora me diz: quanto tempo você aguenta sem Wi-Fi? Responde aqui."
+]}

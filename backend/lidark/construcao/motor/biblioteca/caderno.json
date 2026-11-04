@@ -1,0 +1,725 @@
+[
+ {
+  "id": "ger001",
+  "area": "geral",
+  "texto": "Toda imagem prova o que a voz está dizendo. Se a fala cita um objeto, ele aparece; se não aparece, a fala ou a cena muda.",
+  "tags": [
+   "coerencia",
+   "imagem",
+   "fala"
+  ],
+  "peso": 3,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "ger002",
+  "area": "geral",
+  "texto": "Tudo original: nunca copiar roteiro, cena, personagem ou marca de ninguém. De referências, aprender só técnica.",
+  "tags": [
+   "direitos",
+   "marca",
+   "referencia"
+  ],
+  "peso": 3,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "ger003",
+  "area": "geral",
+  "texto": "Nada publica sozinho sem o dono do canal pedir.",
+  "tags": [
+   "publicar",
+   "autopilot"
+  ],
+  "peso": 3,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "rot004",
+  "area": "roteiro",
+  "texto": "Fala direto com você, em frases curtas de conversa, que uma criança de dez anos entende.",
+  "tags": [
+   "linguagem",
+   "simples"
+  ],
+  "peso": 3,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "rot005",
+  "area": "roteiro",
+  "texto": "Formato: a fala de abertura segue o Experimento de abertura do GUIA.md, sem começar com Se você; depois ciclos Mas problema, Então você solução, Esse é o nome; fecha com Parabéns, você construiu e uma pergunta.",
+  "tags": [
+   "formato",
+   "ciclo",
+   "estrutura"
+  ],
+  "peso": 3,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "rot006",
+  "area": "roteiro",
+  "texto": "Sem algarismos, medidas exatas, porcentagens ou temperaturas. Só informação correta.",
+  "tags": [
+   "numeros",
+   "fatos"
+  ],
+  "peso": 3,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "rot007",
+  "area": "roteiro",
+  "texto": "Todo termo técnico vem com comparação do dia a dia, como são as costelas do telhado.",
+  "tags": [
+   "termo",
+   "comparacao",
+   "analogia"
+  ],
+  "peso": 2,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "rot008",
+  "area": "roteiro",
+  "texto": "Cada problema é concreto e visível na tela, nunca abstrato.",
+  "tags": [
+   "problema",
+   "concreto"
+  ],
+  "peso": 2,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "rot009",
+  "area": "roteiro",
+  "texto": "Cada solução diz o motivo: qual problema ela resolve.",
+  "tags": [
+   "solucao",
+   "motivo"
+  ],
+  "peso": 2,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "rot010",
+  "area": "roteiro",
+  "texto": "De 170 a 210 palavras, cerca de um minuto e meio. Vídeo curto retém mais.",
+  "tags": [
+   "duracao",
+   "tamanho",
+   "retencao"
+  ],
+  "peso": 2,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "rot011",
+  "area": "roteiro",
+  "texto": "Nome técnico com o gênero certo e minúsculas: Essa é a coleta seletiva, nunca Esse é o Coleta seletiva.",
+  "tags": [
+   "concordancia",
+   "nome",
+   "genero"
+  ],
+  "peso": 2,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "rot012",
+  "area": "roteiro",
+  "texto": "Varie as comparações entre vídeos e termine com pergunta que a pessoa consiga responder.",
+  "tags": [
+   "pergunta",
+   "comentarios",
+   "variedade"
+  ],
+  "peso": 2,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "cen013",
+  "area": "cena",
+  "texto": "Abertura: no quadro zero o desastre já está em movimento e o objeto do tema já é reconhecível, sem introdução, cena vazia ou dano que começa depois.",
+  "tags": [
+   "abertura",
+   "gancho",
+   "hook"
+  ],
+  "peso": 3,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "cen014",
+  "area": "cena",
+  "texto": "Um único mundo que cresce: tudo que entra fica em cena e a câmera anda até a peça nova.",
+  "tags": [
+   "mundo",
+   "cenario",
+   "camera"
+  ],
+  "peso": 3,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "cen015",
+  "area": "cena",
+  "texto": "Objetos em tamanho real e no lugar real. Nunca objeto gigante.",
+  "tags": [
+   "escala",
+   "gigante",
+   "tamanho"
+  ],
+  "peso": 3,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "cen016",
+  "area": "cena",
+  "texto": "Nada flutua: toda peça e todo veículo tocam o chão ou o que os sustenta, em qualquer momento.",
+  "tags": [
+   "flutuar",
+   "veiculo",
+   "apoio"
+  ],
+  "peso": 3,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "cen017",
+  "area": "cena",
+  "texto": "Só veículos do tema: em ferrovia aparece trem, não carro nem caminhão.",
+  "tags": [
+   "veiculo",
+   "tema",
+   "trem",
+   "ferrovia"
+  ],
+  "peso": 2,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "cen018",
+  "area": "cena",
+  "texto": "A peça enche o quadro. Sem chão vazio, sem peça pequena no canto e sem a câmera colada em fachada.",
+  "tags": [
+   "enquadramento",
+   "camera",
+   "quadro"
+  ],
+  "peso": 2,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "cen019",
+  "area": "cena",
+  "texto": "Cenário rico e variado entre vídeos; nada de fundo igual em todo vídeo.",
+  "tags": [
+   "variedade",
+   "cenario"
+  ],
+  "peso": 2,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "cen020",
+  "area": "cena",
+  "texto": "Sem fantasia inventada: nada de pinguim na cozinha ou surf na espuma. O final mostra a coisa funcionando de verdade.",
+  "tags": [
+   "final",
+   "fantasia"
+  ],
+  "peso": 2,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "cen021",
+  "area": "cena",
+  "texto": "Final com impacto real: a cidade acendendo, a água correndo, o trem passando.",
+  "tags": [
+   "final",
+   "impacto",
+   "noite"
+  ],
+  "peso": 2,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "cen022",
+  "area": "cena",
+  "texto": "Personagem aparece trabalhando perto da peça, sem tomar a tela nem ficar na frente da câmera.",
+  "tags": [
+   "personagem",
+   "pedreiro"
+  ],
+  "peso": 2,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "ani023",
+  "area": "animacao",
+  "texto": "Camadas entram uma por vez, nunca todas juntas, cada uma trazida por sua máquina.",
+  "tags": [
+   "camada",
+   "ordem",
+   "corte"
+  ],
+  "peso": 3,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "ani024",
+  "area": "animacao",
+  "texto": "O movimento mostra o que a fala diz: se fala em subir o trilho de fora, sobe o de fora.",
+  "tags": [
+   "movimento",
+   "coerencia",
+   "trilho"
+  ],
+  "peso": 2,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "ani025",
+  "area": "animacao",
+  "texto": "Mudança visível: se a fala diz que o meio é mais alto, a inclinação tem que dar para ver.",
+  "tags": [
+   "inclinacao",
+   "visivel",
+   "agua"
+  ],
+  "peso": 2,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "ani026",
+  "area": "animacao",
+  "texto": "Peça de encaixe chega pelo lado certo; veículo entra dirigindo; o que sobe do chão cresce.",
+  "tags": [
+   "entrada",
+   "acao"
+  ],
+  "peso": 2,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "ani027",
+  "area": "animacao",
+  "texto": "Clarão curto e fraco no nome da etapa, sem apagar a imagem nem atrapalhar a leitura.",
+  "tags": [
+   "clarao",
+   "flash",
+   "nome"
+  ],
+  "peso": 2,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "voz028",
+  "area": "voz",
+  "texto": "Voz feminina natural: pt-BR-ThalitaMultilingualNeural.",
+  "tags": [
+   "voz",
+   "narracao",
+   "feminina"
+  ],
+  "peso": 3,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "som029",
+  "area": "som",
+  "texto": "A voz nunca é abafada: água, chuva, motor e zumbido baixam quando a narração entra.",
+  "tags": [
+   "som",
+   "mixagem",
+   "agua",
+   "volume"
+  ],
+  "peso": 3,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "som030",
+  "area": "som",
+  "texto": "Sem beeps nem sons avisando que algo terminou.",
+  "tags": [
+   "beep",
+   "aviso"
+  ],
+  "peso": 2,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "cap031",
+  "area": "capa",
+  "texto": "Capa vertical com a obra pronta e o texto embaixo, sem cobrir a peça principal.",
+  "tags": [
+   "capa",
+   "thumbnail"
+  ],
+  "peso": 2,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "pub032",
+  "area": "publicacao",
+  "texto": "Quando postar um vídeo melhor do mesmo tema, tirar o antigo do ar antes.",
+  "tags": [
+   "duplicado",
+   "tema"
+  ],
+  "peso": 2,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "pub033",
+  "area": "publicacao",
+  "texto": "Cada vídeo vai com título, descrição, tags e comentário fixado com a pergunta final.",
+  "tags": [
+   "titulo",
+   "descricao",
+   "tags"
+  ],
+  "peso": 2,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "pub034",
+  "area": "publicacao",
+  "texto": "Título no padrão Como construir X do zero, com #Shorts.",
+  "tags": [
+   "titulo",
+   "padrao"
+  ],
+  "peso": 2,
+  "origem": "correções do dono do canal"
+ },
+ {
+  "id": "som035",
+  "area": "som",
+  "texto": "A voz manda: efeitos e música bem abaixo dela, sem estrondo. Público reclamou de som alto.",
+  "tags": [
+   "som",
+   "volume",
+   "mixagem",
+   "alto"
+  ],
+  "peso": 3,
+  "origem": "retorno do dono no vídeo do elevador"
+ },
+ {
+  "id": "cen036",
+  "area": "cena",
+  "texto": "Personagem nunca fica colado na câmera nem tampa a peça, nem por um instante.",
+  "tags": [
+   "personagem",
+   "camera"
+  ],
+  "peso": 3,
+  "origem": "retorno do dono no vídeo do elevador"
+ },
+ {
+  "id": "cen037",
+  "area": "cena",
+  "texto": "Prédio em corte, com os andares à mostra, deixa o quadro cheio e foi aprovado pelo dono.",
+  "tags": [
+   "corte",
+   "predio",
+   "mundo"
+  ],
+  "peso": 3,
+  "origem": "retorno do dono no vídeo do elevador"
+ },
+ {
+  "id": "rot038",
+  "area": "roteiro",
+  "texto": "Gancho final: depois do Parabéns, solta uma crença ou dilema do dia a dia ligado ao tema e pede para a pessoa tomar lado em uma palavra, como verdade ou mentira. Nada de Responde aqui genérico.",
+  "tags": [
+   "gancho",
+   "final",
+   "pergunta",
+   "comentarios"
+  ],
+  "peso": 3,
+  "origem": "pedido do dono no vídeo do elevador"
+ },
+ {
+  "id": "cen039",
+  "area": "cena",
+  "texto": "Processo que muda por dentro (líquido, solo, máquina) fica em corte de maquete: sem a parede da frente, com o mesmo chão fatiado mostrando canos e camadas num mundo só.",
+  "tags": [
+   "camera",
+   "corte",
+   "mundo"
+  ],
+  "peso": 2,
+  "origem": "vídeo tratamento-de-agua"
+ },
+ {
+  "id": "cen040",
+  "area": "cena",
+  "texto": "Depois de posicionar a câmera, confira a geometria em volta dela: telhado, carro ou árvore perto da lente tampa o quadro inteiro. Em tudo todo mundo faz junto, use cortes rápidos de casa em casa em vez de plano torto.",
+  "tags": [
+   "camera",
+   "composicao"
+  ],
+  "peso": 2,
+  "origem": "vídeo tratamento-de-agua"
+ },
+ {
+  "id": "cen041",
+  "area": "cena",
+  "texto": "Coisa invisível, como germe, aparece dentro de uma lupa presa à obra, nunca como objeto gigante no mundo. Copo de vidro precisa de depthWrite false, senão esconde o líquido, e à noite a cena interna precisa de luz própria.",
+  "tags": [
+   "escala",
+   "vidro",
+   "noite"
+  ],
+  "peso": 2,
+  "origem": "vídeo tratamento-de-agua"
+ },
+ {
+  "id": "cen042",
+  "area": "cena",
+  "texto": "Obra grande demais para o quadro vertical fica em maquete cortada no meio: o chão fatiado mostra o que está enterrado, o perfil cortado enche o quadro e a metade da frente só entra no plano aéreo final.",
+  "tags": [
+   "corte",
+   "mundo",
+   "camera"
+  ],
+  "peso": 2,
+  "origem": "vídeo como-construir-estadio-de-futebol"
+ },
+ {
+  "id": "cen043",
+  "area": "cena",
+  "texto": "Ruas e pisos em planos quase na mesma altura trocam de ordem sem aviso: confira qual fica por cima, ou uma rua aparece atravessando a obra.",
+  "tags": [
+   "chao",
+   "camadas"
+  ],
+  "peso": 2,
+  "origem": "vídeo como-construir-estadio-de-futebol"
+ },
+ {
+  "id": "ani044",
+  "area": "animacao",
+  "texto": "Peça que vai ter problema precisa estar visível desde o começo da fala, pendurada ou parada, e não só no instante em que cai.",
+  "tags": [
+   "abertura",
+   "coerencia"
+  ],
+  "peso": 2,
+  "origem": "vídeo como-construir-estadio-de-futebol"
+ },
+ {
+  "id": "cen045",
+  "area": "cena",
+  "texto": "Em tema de interior, corte a casa ao meio dentro de um bairro: a vertical do Short mostra dois andares, a fiação atravessa a casa e o recuo final revela a rua à noite.",
+  "tags": [
+   "camera",
+   "mundo",
+   "interior"
+  ],
+  "peso": 2,
+  "origem": "vídeo quarto-gamer-completo"
+ },
+ {
+  "id": "cen046",
+  "area": "cena",
+  "texto": "Antes de fechar a câmera em plano curto, confira a linha até a peça: mãos e cabeça do personagem nunca ficam entre ela e a peça. Se a peça for pequena, ponha a câmera além da mão, não atrás do ombro.",
+  "tags": [
+   "camera",
+   "personagem"
+  ],
+  "peso": 2,
+  "origem": "vídeo quarto-gamer-completo"
+ },
+ {
+  "id": "ani047",
+  "area": "animacao",
+  "texto": "Se a etapa acontece atrás de um objeto, gire o objeto para a câmera enquanto a peça é instalada e devolva na hora do nome, para a imagem provar a fala.",
+  "tags": [
+   "movimento",
+   "prova"
+  ],
+  "peso": 2,
+  "origem": "vídeo quarto-gamer-completo"
+ },
+ {
+  "id": "cen048",
+  "area": "cena",
+  "texto": "Em prédio em corte com grade de pilares, ponha a câmera e o alvo no meio do vão entre dois pilares; câmera alinhada com a linha de colunas deixa um pilar no centro do quadro.",
+  "tags": [
+   "camera",
+   "predio",
+   "corte"
+  ],
+  "peso": 2,
+  "origem": "vídeo um-shopping"
+ },
+ {
+  "id": "cen049",
+  "area": "cena",
+  "texto": "Interior claro estoura em branco com hemisfério forte e luz de preenchimento: use piso de cor média com rejunte, cor de chão do hemisfério neutra (não verde, senão o teto fica esverdeado), preenchimento até 0,5 e vidro de guarda-corpo com opacidade até 0,1.",
+  "tags": [
+   "luz",
+   "interior",
+   "cor"
+  ],
+  "peso": 2,
+  "origem": "vídeo um-shopping"
+ },
+ {
+  "id": "ani050",
+  "area": "animacao",
+  "texto": "Para provar que o sol entra por um vão no teto, além da sombra real, ponha um feixe aditivo quente e uma mancha clara no piso; só a sombra some no meio de superfícies claras.",
+  "tags": [
+   "luz",
+   "sol",
+   "claraboia"
+  ],
+  "peso": 2,
+  "origem": "vídeo um-shopping"
+ },
+ {
+  "id": "cen051",
+  "area": "cena",
+  "texto": "No vídeo vertical o quadro é estreito: mire a câmera no próprio personagem ou peça da fala, não num ponto ao lado dele, senão ele sai da tela.",
+  "tags": [
+   "camera",
+   "enquadramento"
+  ],
+  "peso": 2,
+  "origem": "vídeo uma-vila-virando-cidade"
+ },
+ {
+  "id": "cen052",
+  "area": "cena",
+  "texto": "Na abertura, o dano já começa antes do quadro zero (tempos negativos): rachaduras e água baixando já pela metade quando a imagem aparece.",
+  "tags": [
+   "abertura",
+   "animacao"
+  ],
+  "peso": 2,
+  "origem": "vídeo uma-vila-virando-cidade"
+ },
+ {
+  "id": "cen053",
+  "area": "cena",
+  "texto": "Quando a fala diz que um lugar está vazio ou só tem mato, mostre mato de verdade e faça ele sumir quando a obra chega; gramado liso não prova a fala.",
+  "tags": [
+   "mundo",
+   "prova"
+  ],
+  "peso": 2,
+  "origem": "vídeo uma-vila-virando-cidade"
+ },
+ {
+  "id": "cen054",
+  "area": "cena",
+  "texto": "Corte do solo visto de lado: o camTo não deixa a câmera descer abaixo de 0,35 m, então sobrescreva cam.position e cam.lookAt depois do camTo nesse trecho e mire para baixo, de modo que a borda de cima do quadro encontre o chão só no plano do corte; assim nada da superfície flutua no topo da imagem.",
+  "tags": [
+   "camera",
+   "corte",
+   "subsolo"
+  ],
+  "peso": 2,
+  "origem": "vídeo um-arranha-ceu"
+ },
+ {
+  "id": "cen055",
+  "area": "cena",
+  "texto": "Antes de fixar uma câmera alta na cidade, confira se o ponto cai numa rua ou no parque e não dentro de um quarteirão com prédios; câmera dentro de prédio vira uma parede colorida no quadro.",
+  "tags": [
+   "camera",
+   "cidade"
+  ],
+  "peso": 2,
+  "origem": "vídeo um-arranha-ceu"
+ },
+ {
+  "id": "cen056",
+  "area": "cena",
+  "texto": "Objeto pequeno citado na fala, como uma moeda, fica no tamanho real e a câmera acompanha o objeto de perto enquanto ele cai, com o fundo mostrando a altura; nunca aumente o objeto.",
+  "tags": [
+   "camera",
+   "escala",
+   "gancho"
+  ],
+  "peso": 2,
+  "origem": "vídeo um-arranha-ceu"
+ },
+ {
+  "id": "cen057",
+  "area": "cena",
+  "texto": "Água parada (piscina, tanque): caixa transparente com side BackSide tinge fundo e paredes, e um plano por cima com emissiveMap de cáustica em elipses dá o brilho. Para o nível baixando se ler num quadro só, pinte uma faixa escura molhada da marca antiga até a água.",
+  "tags": [
+   "agua",
+   "abertura"
+  ],
+  "peso": 2,
+  "origem": "vídeo uma-piscina"
+ },
+ {
+  "id": "cen058",
+  "area": "cena",
+  "texto": "À noite, PointLight fraca (intensidade até uns 7, decay 2, distância curta). Luz pontual forte de casa ou piscina clareia o quintal inteiro e a noite some; o brilho deve vir do emissive da peça.",
+  "tags": [
+   "noite",
+   "luz"
+  ],
+  "peso": 2,
+  "origem": "vídeo uma-piscina"
+ },
+ {
+  "id": "ani059",
+  "area": "animacao",
+  "texto": "Quando uma fala encadeia duas ações (cavar e depois compactar), termine a primeira antes da palavra da segunda e faça a segunda começar onde a primeira já acabou, senão o personagem aparece enterrado no que ainda não foi feito.",
+  "tags": [
+   "tempo",
+   "personagem"
+  ],
+  "peso": 2,
+  "origem": "vídeo uma-piscina"
+ },
+ {
+  "id": "cen060",
+  "area": "cena",
+  "texto": "Quando a câmera acompanha por trás algo que faz uma curva grande, ponha chaves intermediárias ao longo da curva; interpolar direto entre lados opostos faz a câmera passar por dentro do personagem.",
+  "tags": [
+   "camera",
+   "curva",
+   "seguir"
+  ],
+  "peso": 2,
+  "origem": "vídeo paraquedas"
+ },
+ {
+  "id": "cen061",
+  "area": "cena",
+  "texto": "Cena de queda ou voo: câmera acima, olhando para baixo, com o chão ocupando o fundo. Com a câmera nivelada o céu toma o quadro e ninguém entende que está caindo.",
+  "tags": [
+   "camera",
+   "abertura",
+   "ceu",
+   "queda"
+  ],
+  "peso": 2,
+  "origem": "vídeo paraquedas"
+ },
+ {
+  "id": "cen062",
+  "area": "cena",
+  "texto": "Antes de espalhar postes, bandeiras e figurantes, confira a linha entre a câmera e o alvo de cada plano: peça fina perto da câmera vira uma barra cortando o quadro.",
+  "tags": [
+   "camera",
+   "composicao",
+   "figurantes"
+  ],
+  "peso": 2,
+  "origem": "vídeo paraquedas"
+ }
+]

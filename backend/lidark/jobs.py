@@ -20,7 +20,7 @@ from .models import Job, now
 log = logging.getLogger("lidark.jobs")
 
 HANDLERS: dict[str, Callable[["JobContext"], dict | None]] = {}
-HEAVY_KINDS = {"render_video", "story_render"}
+HEAVY_KINDS = {"construcao_claude", "construcao_semanal", "render_video", "story_render"}
 
 
 def handler(kind: str):

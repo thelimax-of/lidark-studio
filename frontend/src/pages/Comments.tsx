@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { MessageSquare, RefreshCw, Send, X, ThumbsUp, Link2, Pin, MessageCircle, ExternalLink, Lightbulb } from 'lucide-react'
+import { MessageSquare, RefreshCw, Send, X, ThumbsUp, Link2, Pin, MessageCircle, ExternalLink, Lightbulb, Sparkles, Loader2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api, invalidate, useApi, type Idea } from '../api'
 import { act, ago, ChannelScope, ChannelTag, Empty, PageHeader, Tabs, useChannel, useScope } from '../ui'
@@ -65,7 +65,12 @@ export default function Comments() {
 function Item({ c, canWrite, showChannel, idea }: { c: C; canWrite: boolean; showChannel?: boolean; idea?: Idea }) {
   const [text, setText] = useState(c.suggestion || '')
   useEffect(() => setText(c.suggestion || ''), [c.suggestion])
+  const [gerando, setGerando] = useState(false)
   const done = () => invalidate('/comments')
+  const sugerir = () => {
+    setGerando(true)
+    act(() => api(`/comments/${c.id}/suggest`, { body: {} })).then(done).finally(() => setGerando(false))
+  }
   return (
     <div className="card card-hover overflow-hidden">
       <div className="p-4 flex gap-3">
@@ -92,6 +97,7 @@ function Item({ c, canWrite, showChannel, idea }: { c: C; canWrite: boolean; sho
             {c.suggestion && <span className="badge badge-accent !h-5 text-[11px]">sugerido pela IA</span>}
             <span className={`text-[11.5px] num ${text.length > 1000 ? 'text-bad' : 'text-faint'}`}>{text.length}/1000</span>
             <div className="flex-1" />
+            <button className="btn btn-sm btn-ghost" disabled={gerando} onClick={sugerir}>{gerando ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />} {c.suggestion ? 'Outra sugestão' : 'Sugerir resposta'}</button>
             <button className="btn btn-sm btn-ghost" onClick={() => act(() => api(`/comments/${c.id}/ignore`, { body: {} })).then(done)}><X size={13} /> Ignorar</button>
             <button className="btn btn-sm btn-primary" disabled={!canWrite || !text.trim()}
               onClick={() => act(() => api(`/comments/${c.id}/reply`, { body: { text } }), 'Resposta publicada').then(done)}><Send size={13} /> Responder</button>

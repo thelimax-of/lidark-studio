@@ -546,6 +546,11 @@ def job_autopilot(ctx: JobContext) -> dict:
                 payload={"count": 8, "format": fmt})
         return {"msg": "sem pautas boas; buscando novas"}
     idea = pick[0]
+    with session() as s:  # reserva a pauta já aqui: dois disparos juntos não podem produzir a mesma ideia
+        db = s.get(Idea, idea.id)
+        db.status = "scripted"
+        s.add(db)
+        s.commit()
     payload = {"auto_render": True, "format": fmt}
     if ctx.payload.get("publish_at"):
         payload["publish_at"] = ctx.payload["publish_at"]

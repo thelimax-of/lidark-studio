@@ -307,6 +307,10 @@ def write_episode(ch: Channel, b: dict[str, Any], fmt: str = "short", *, idea: I
         from . import vetor_writer
         return vetor_writer.write_episode(ch, b, fmt, idea=idea, topic=topic, arc=arc, plan=plan, seconds=seconds, log=log,
                                           series_block=series_block, research_ok=research_ok, research_query=research_query)
+    if b.get("render_style") == "quadro":  # motor quadro: um vídeo por dia, catálogo de planos; import só aqui
+        from . import quadro_writer
+        return quadro_writer.write_episode(ch, b, fmt, idea=idea, topic=topic, arc=arc, plan=plan, seconds=seconds, log=log,
+                                           series_block=series_block, research_ok=research_ok, research_query=research_query)
     plan = plan or {}
     rng = random.Random(f"{ch.id}-{time.time()}")
     if seconds is None:

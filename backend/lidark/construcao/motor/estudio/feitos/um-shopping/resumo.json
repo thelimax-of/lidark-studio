@@ -1,0 +1,39 @@
+{
+ "tema": "um shopping",
+ "titulo": "Como construir um shopping do zero, parte por parte",
+ "falas": [
+  "A rua das compras virou um rio. Loja na rua, com chuva, fica vazia.",
+  "Mas juntar todas as lojas pede um prédio enorme. Então você levanta pilares e lajes de concreto. Essa é a estrutura.",
+  "Mas loja fechada ninguém vê. Então você faz a frente de vidro, virada para um corredor. Essas são as vitrines.",
+  "Mas subir escada carregando sacola cansa. Então você instala degraus que andam sozinhos. Essa é a escada rolante.",
+  "Mas o meio do prédio fica escuro. Então você troca o teto por vidro, e o sol entra. Essa é a claraboia.",
+  "Mas com tanta gente, o ar esquenta. Então você põe máquinas no telhado que gelam o ar e sopram por dutos. Esse é o ar-condicionado central.",
+  "Mas a fome bate no meio das compras. Então você junta restaurantes em volta de mesas para todos. Essa é a praça de alimentação.",
+  "Mas todo mundo chega de carro. Então você empilha andares de vagas, ligados por uma rampa. Esse é o estacionamento.",
+  "E se pegar fogo? Então você espalha no teto bicos que soltam água sozinhos com o calor. Esse é o chuveiro automático.",
+  "Parabéns, você construiu um shopping! Tem gente que jura que shopping não tem relógio para você perder a hora. Verdade ou mentira?"
+ ],
+ "destaque": [
+  "estrutura",
+  "vitrines",
+  "rolante",
+  "claraboia",
+  "ar-condicionado",
+  "alimentação",
+  "estacionamento",
+  "automático"
+ ],
+ "capa": "DA RUA AO SHOPPING",
+ "descricao": "Como uma rua de lojas alagada vira um shopping, construído parte por parte: estrutura, vitrines, escada rolante, claraboia, ar-condicionado central, praça de alimentação, estacionamento e chuveiro automático. Shopping não tem relógio para você perder a hora? Verdade ou mentira?",
+ "tags": [
+  "shopping",
+  "como funciona",
+  "engenharia",
+  "construção",
+  "escada rolante",
+  "claraboia",
+  "parte por parte",
+  "curiosidades",
+  "shorts"
+ ]
+}

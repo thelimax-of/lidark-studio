@@ -1,0 +1,39 @@
+{
+ "tema": "Paraquedas",
+ "titulo": "Como construir um paraquedas do zero, parte por parte",
+ "falas": [
+  "Esse paraquedas não está abrindo. O pano sai embolado, e a pessoa despenca. Pano solto não segura ar.",
+  "Mas pano reto só balança. Então você costura duas camadas de náilon, com paredes no meio. Essas são as células.",
+  "Mas elas estão murchas. Então o vento entra pela frente e enche tudo, virando uma asa. Esse é o velame.",
+  "Mas a asa precisa te carregar. Então dezenas de cordas descem até fitas nas pernas e no peito. Esse é o arnês.",
+  "Mas abrir de uma vez dá tranco. Então um pano com argolas desce devagar pelas cordas. Esse é o slider.",
+  "Mas o velame não pode abrir no avião. Então você dobra tudo numa mochila e trava com um pino. Esse é o container.",
+  "Mas quem puxa tudo para fora? Então você solta um paraquedinha, que arranca o pino e o resto. Esse é o extrator.",
+  "Mas sem controle você pousa em qualquer lugar. Então você puxa alças que freiam e viram o velame. Esses são os batoques.",
+  "E se o principal enroscar? Então você solta ele e abre outro, guardado na mochila. Esse é o reserva.",
+  "Parabéns, você construiu um paraquedas! Tem gente que jura que na queda livre não dá para respirar. Verdade ou mentira?"
+ ],
+ "destaque": [
+  "células",
+  "velame",
+  "arnês",
+  "slider",
+  "container",
+  "extrator",
+  "batoques",
+  "reserva"
+ ],
+ "capa": "PARAQUEDAS DO ZERO",
+ "descricao": "Como um paraquedas de verdade funciona, construído parte por parte: células de náilon, velame que vira asa, cordas e arnês, slider que segura a abertura, container com pino, extrator, batoques para pilotar e o reserva. Na queda livre dá para respirar? Verdade ou mentira?",
+ "tags": [
+  "paraquedas",
+  "paraquedismo",
+  "como funciona",
+  "engenharia",
+  "queda livre",
+  "salto de paraquedas",
+  "parte por parte",
+  "curiosidades",
+  "shorts"
+ ]
+}

@@ -217,7 +217,7 @@ def load(slug: str) -> dict[str, Any]:
 
 
 def save(slug: str, data: dict[str, Any]) -> dict[str, Any]:
-    allowed = set(DEFAULTS["ouro-do-passado"]) | {"enabled", "share", "notes", "voices", "max_parts", "dedicated", "image_model", "hero_source", "short_seconds", "render_style", "vetor_vote"}
+    allowed = set(DEFAULTS["ouro-do-passado"]) | {"enabled", "share", "notes", "voices", "max_parts", "dedicated", "image_model", "hero_source", "short_seconds", "render_style", "vetor_vote", "quadro_voice", "quadro_vote", "quadro_dias"}
     with _lock:
         cur = load(slug)
         for k, v in data.items():

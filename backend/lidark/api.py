@@ -1016,6 +1016,30 @@ def comment_reply(cid: int, body: ReplyIn):
     return {"ok": True}
 
 
+@router.post("/comments/{cid}/suggest")
+def comment_suggest(cid: int, s: Session = Depends(get_session)):
+    """Gera na hora a resposta sugerida. Só preenche o texto: publicar continua sendo com você."""
+    from .community import suggest_replies
+    from .models import Comment
+    c = s.get(Comment, cid)
+    if not c:
+        raise HTTPException(404, "Comentário não encontrado")
+    ch = s.get(Channel, c.channel_id)
+    if c.suggestion:
+        c.suggestion = ""
+        s.add(c)
+        s.commit()
+    try:
+        suggest_replies(ch, only=cid)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"A IA não respondeu agora: {e}") from e
+    s.expire_all()
+    c = s.get(Comment, cid)
+    if not c.suggestion and c.status == "new":
+        raise HTTPException(502, "A IA não devolveu sugestão. Tente de novo.")
+    return {"suggestion": c.suggestion, "status": c.status}
+
+
 @router.post("/comments/{cid}/ignore")
 def comment_ignore(cid: int, s: Session = Depends(get_session)):
     from .models import Comment

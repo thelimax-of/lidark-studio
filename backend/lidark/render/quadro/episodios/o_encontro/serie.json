@@ -1,0 +1,27 @@
+{
+ "titulo": "O ENCONTRO",
+ "dias": 6,
+ "meta": 250,
+ "voz": {"provider": "edge", "voice": "pt-BR-ThalitaMultilingualNeural", "rate": "+14%"},
+ "hud": {"dias": "ATÉ SÁBADO", "valor": "CARTEIRA"},
+ "personagens": {
+  "ze": "Zé, 29 anos, entregador de bicicleta. Mora num quartinho alugado.",
+  "bia": "Bia, atendente da padaria. Marcou o encontro.",
+  "chefe": "Chefe do Zé, o homem mais bravo do bairro."
+ },
+ "estado": {
+  "dia_atual": 1,
+  "dinheiro": 11.40,
+  "itens": ["celular", "bicicleta", "camisa"],
+  "dias_ate_sabado": 5,
+  "escolha_vencedora": null
+ },
+ "esboco": {
+  "1_segunda": "A mensagem da Bia, a conta de R$ 250, a batida na barraca de melancia. Termina com R$ 9,40. Comentário escolhe BICICLETA ou CHEFE.",
+  "2_terca": "A escolha vencedora: vende a bicicleta por R$ 100 ou pede adiantamento ao chefe. A consequência cobra no fim do dia.",
+  "3_quarta": "Bico novo para compensar. Dinheiro sobe, e a Bia manda uma foto do restaurante que quer conhecer, mais caro que a conta.",
+  "4_quinta": "A camisa do furo azul some na lavanderia. Perfume e carro entram em disputa.",
+  "5_sexta": "Falta pouco e surge um imprevisto com o feirante da melancia. Última escolha do público.",
+  "6_sabado": "Sete da noite. O encontro, com o que sobrou do plano."
+ }
+}

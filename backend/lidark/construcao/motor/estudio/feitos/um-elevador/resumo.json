@@ -1,0 +1,38 @@
+{
+ "tema": "um elevador",
+ "titulo": "Como construir um elevador do zero, parte por parte",
+ "falas": [
+  "Se você construir um prédio alto sem elevador, todo mundo sobe de escada, e tem gente que nem consegue.",
+  "Mas subir exige um caminho. Então você abre um túnel de concreto do fundo até o topo. Esse é o poço.",
+  "Mas uma caixa solta bate nas paredes. Então você prende trilhos de aço, e a cabine desliza neles. Essas são as guias.",
+  "Mas a cabine não sobe sozinha. Então você pendura ela em cabos, que passam numa roda girada por um motor. Essa é a máquina de tração.",
+  "Mas o motor faz força demais. Então você pendura na outra ponta um bloco pesado, que desce quando a cabine sobe. Esse é o contrapeso.",
+  "E se os cabos arrebentarem? Então você instala garras na cabine, que travam nos trilhos se ela descer rápido demais. Esse é o freio de segurança.",
+  "Mas e se ela passar do térreo? Então você coloca molas grossas no fundo do poço. Esse é o amortecedor.",
+  "Mas alguém pode cair no poço. Então você coloca portas em cada andar, que só abrem com a cabine ali. Essas são as portas de pavimento.",
+  "Mas como ele sabe aonde ir? Então você instala botões e um computador que organiza as paradas. Esse é o comando.",
+  "Parabéns, você construiu um elevador! Mas tem gente que jura que apertar o botão várias vezes faz ele chegar mais rápido. Verdade ou mentira? Comenta aí."
+ ],
+ "destaque": [
+  "poço",
+  "guias",
+  "tração",
+  "contrapeso",
+  "freio",
+  "amortecedor",
+  "portas",
+  "comando"
+ ],
+ "capa": "ELEVADOR DO ZERO",
+ "descricao": "Como um elevador funciona de verdade, construído parte por parte dentro de um prédio: poço, guias, máquina de tração, contrapeso, freio de segurança, amortecedor, portas e comando. Você aperta o botão uma vez só ou várias vezes?",
+ "tags": [
+  "elevador",
+  "como funciona",
+  "engenharia",
+  "construção",
+  "prédio",
+  "parte por parte",
+  "curiosidades",
+  "shorts"
+ ]
+}

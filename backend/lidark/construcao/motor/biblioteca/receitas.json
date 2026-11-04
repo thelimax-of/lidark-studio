@@ -1,0 +1,666 @@
+{
+ "lixo": {
+  "chaves": "lixo coleta reciclagem residuos",
+  "tema": "a coleta de lixo da cidade",
+  "mundo": "rua",
+  "final": "CIDADE LIMPA!",
+  "etapas": [
+   {
+    "o": "ideia ruim: deixar o lixo na calçada",
+    "itens": [
+     [
+      "rua_lixeira_poste",
+      "cresce",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "o lixo acumula na rua e atrai bichos; solução: contêineres nas esquinas",
+    "nome": "Contêiner",
+    "erroNome": "Lixo na rua",
+    "itens": [
+     [
+      "rua_conteiner_lixo",
+      "desliza",
+      2
+     ]
+    ]
+   },
+   {
+    "o": "os contêineres enchem; solução: caminhão com prensa que esmaga o lixo",
+    "nome": "Caminhão compactador",
+    "itens": [
+     [
+      "veiculo_caminhao_lixo",
+      "dirige",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "reciclável se perde misturado; solução: separar por cor",
+    "nome": "Coleta seletiva",
+    "itens": [
+     [
+      "rua_lixeiras_seletivas",
+      "desliza",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "o material chega misturado; solução: esteira onde se separa tudo",
+    "nome": "Triagem",
+    "itens": [
+     [
+      "esteira_industrial",
+      "desliza",
+      1
+     ]
+    ],
+    "fluxo": true
+   },
+   {
+    "o": "restos de comida apodrecem e soltam gás; solução: biodigestor que vira gás e adubo",
+    "nome": "Biodigestor",
+    "itens": [
+     [
+      "biodigestor",
+      "cresce",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "entulho de obra não vai no caminhão comum; solução: caçamba",
+    "nome": "Caçamba",
+    "itens": [
+     [
+      "rua_cacamba",
+      "desliza",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "o que sobrou contamina o solo; solução: máquina enterra em camadas no aterro",
+    "nome": "Aterro sanitário",
+    "itens": [
+     [
+      "obra_trator_esteira",
+      "dirige",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "parabéns e pergunta",
+    "itens": [
+     [
+      "rua_canteiro",
+      "cresce",
+      1
+     ]
+    ]
+   }
+  ]
+ },
+ "agua": {
+  "chaves": "agua torneira saneamento",
+  "tema": "a água que chega na sua torneira",
+  "mundo": "campo",
+  "final": "ÁGUA NA TORNEIRA!",
+  "etapas": [
+   {
+    "o": "ideia ruim: tirar água de um poço para a cidade toda",
+    "itens": [
+     [
+      "inf_poco",
+      "cresce",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "um poço não basta; solução: represa guardando água do rio",
+    "nome": "Barragem",
+    "itens": [
+     [
+      "barragem",
+      "cresce",
+      1
+     ]
+    ],
+    "rio": true
+   },
+   {
+    "o": "a água está longe e embaixo; solução: bomba que empurra pelo cano",
+    "nome": "Bomba",
+    "itens": [
+     [
+      "bomba_dagua",
+      "desliza",
+      1
+     ],
+     [
+      "tubulacoes",
+      "desliza",
+      1
+     ]
+    ],
+    "fluxo": true
+   },
+   {
+    "o": "a água vem barrenta; solução: tanque onde a sujeira afunda",
+    "nome": "Decantação",
+    "erroNome": "Água suja",
+    "itens": [
+     [
+      "tanque_decantacao",
+      "cresce",
+      1
+     ]
+    ],
+    "efeito": "decanta"
+   },
+   {
+    "o": "ainda sobram micróbios e sujeira fina; solução: estação filtra e coloca cloro",
+    "nome": "Estação de tratamento",
+    "itens": [
+     [
+      "estacao_tratamento",
+      "cresce",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "todo mundo abre a torneira na mesma hora; solução: reservatório",
+    "nome": "Reservatório",
+    "itens": [
+     [
+      "reservatorio_agua",
+      "cresce",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "falta pressão nas partes altas; solução: caixa elevada, a gravidade empurra",
+    "nome": "Torre d'água",
+    "itens": [
+     [
+      "torre_caixa_dagua",
+      "cresce",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "sem saber quanto cada casa gasta; solução: medidor",
+    "nome": "Hidrômetro",
+    "itens": [
+     [
+      "inf_hidrometro",
+      "desliza",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "a água chega à casa; a torneira controla o fluxo",
+    "nome": "Torneira",
+    "itens": [
+     [
+      "mec_torneira",
+      "desliza",
+      1
+     ]
+    ],
+    "efeito": "jato",
+    "bicoX": 1.28,
+    "bicoY": 0.5,
+    "bicoZ": 0
+   },
+   {
+    "o": "parabéns e pergunta",
+    "itens": [],
+    "repete": true
+   }
+  ],
+  "rede": true
+ },
+ "energia": {
+  "chaves": "energia eletricidade luz tomada",
+  "tema": "a energia que chega na sua tomada",
+  "mundo": "campo",
+  "final": "LUZ ACESA!",
+  "etapas": [
+   {
+    "o": "ideia ruim: um gerador em cada casa",
+    "itens": [
+     [
+      "obra_gerador",
+      "desliza",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "um gerador pequeno não basta; solução: represa move a água",
+    "nome": "Barragem",
+    "itens": [
+     [
+      "barragem",
+      "cresce",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "a água precisa virar giro; solução: turbina",
+    "nome": "Turbina",
+    "itens": [
+     [
+      "turbina_hidraulica",
+      "desliza",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "giro não é energia; solução: gerador com ímã e cobre",
+    "nome": "Gerador",
+    "itens": [
+     [
+      "gerador_usina",
+      "desliza",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "a energia perde força no caminho; solução: aumentar a tensão",
+    "nome": "Transformador",
+    "itens": [
+     [
+      "transformador_grande",
+      "desliza",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "a cidade é longe; solução: torres e cabos altos",
+    "nome": "Linha de transmissão",
+    "itens": [
+     [
+      "torre_transmissao",
+      "cresce",
+      2
+     ]
+    ]
+   },
+   {
+    "o": "tensão alta queima tudo; solução: baixar antes da cidade",
+    "nome": "Subestação",
+    "itens": [
+     [
+      "subestacao",
+      "cresce",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "a energia chega à rua; solução: poste e transformador pequeno",
+    "nome": "Rede de distribuição",
+    "itens": [
+     [
+      "transformador_poste",
+      "cresce",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "um curto pode pegar fogo; solução: disjuntor desarma",
+    "nome": "Disjuntor",
+    "itens": [
+     [
+      "quadro_disjuntores",
+      "desliza",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "parabéns e pergunta",
+    "itens": [
+     [
+      "ele_lampada",
+      "cai",
+      1
+     ]
+    ]
+   }
+  ]
+ },
+ "correios": {
+  "chaves": "encomenda entrega correios pacote compra",
+  "tema": "como sua encomenda chega em casa",
+  "mundo": "rua",
+  "final": "ENTREGUE!",
+  "etapas": [
+   {
+    "o": "ideia ruim: levar cada pacote de carro, um por vez",
+    "itens": [
+     [
+      "ser_encomenda",
+      "cai",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "fica caro e demorado; solução: guardar tudo num só lugar",
+    "nome": "Armazém",
+    "itens": [
+     [
+      "ser_armazem",
+      "cresce",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "ninguém acha os pacotes; solução: prateleiras organizadas",
+    "nome": "Estoque",
+    "itens": [
+     [
+      "ser_prateleira_estoque",
+      "desliza",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "subir nas prateleiras é lento; solução: máquina que levanta",
+    "nome": "Empilhadeira",
+    "itens": [
+     [
+      "obra_empilhadeira",
+      "dirige",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "os pacotes vão para lugares diferentes; solução: esteira que separa",
+    "nome": "Triagem",
+    "itens": [
+     [
+      "ser_esteira_correio",
+      "desliza",
+      1
+     ]
+    ],
+    "fluxo": true
+   },
+   {
+    "o": "muitos pacotes para a mesma região; solução: um caminhão grande",
+    "nome": "Carreta",
+    "itens": [
+     [
+      "veiculo_carreta",
+      "dirige",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "a carreta não entra na rua estreita; solução: veículo menor",
+    "nome": "Última milha",
+    "itens": [
+     [
+      "ser_caminhao_entrega",
+      "dirige",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "ninguém em casa; solução: lugar para deixar",
+    "nome": "Caixa de correio",
+    "itens": [
+     [
+      "ser_caixa_correio",
+      "desliza",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "parabéns e pergunta",
+    "itens": [
+     [
+      "ser_robo_entrega",
+      "dirige",
+      1
+     ]
+    ]
+   }
+  ]
+ },
+ "banco": {
+  "chaves": "banco dinheiro poupanca credito",
+  "tema": "como um banco funciona",
+  "mundo": "cidade",
+  "final": "DINHEIRO SEGURO!",
+  "etapas": [
+   {
+    "o": "ideia ruim: guardar dinheiro em casa",
+    "itens": [
+     [
+      "obj_dinheiro",
+      "cai",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "dinheiro em casa corre risco; solução: lugar protegido",
+    "nome": "Cofre",
+    "itens": [
+     [
+      "ser_cofre_banco",
+      "desliza",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "todos querem guardar no mesmo lugar; solução: um prédio para isso",
+    "nome": "Agência",
+    "itens": [
+     [
+      "banco_agencia",
+      "cresce",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "fila para sacar; solução: máquina que funciona sempre",
+    "nome": "Caixa eletrônico",
+    "itens": [
+     [
+      "ser_caixa_eletronico",
+      "desliza",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "levar dinheiro nas compras é arriscado; solução: pagar com cartão",
+    "nome": "Maquininha",
+    "itens": [
+     [
+      "ser_maquininha",
+      "desliza",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "o dinheiro parado não rende; solução: banco empresta e cobra mais",
+    "nome": "Juros",
+    "itens": [
+     [
+      "ser_grafico_3d",
+      "cresce",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "o saldo precisa estar registrado; solução: computadores guardam tudo",
+    "nome": "Servidores",
+    "itens": [
+     [
+      "ser_data_center",
+      "cresce",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "alguém pode tentar invadir; solução: proteger as contas",
+    "nome": "Criptografia",
+    "itens": [
+     [
+      "ser_cadeado_digital",
+      "cai",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "parabéns e pergunta",
+    "itens": [
+     [
+      "ser_pilha_notas",
+      "cai",
+      1
+     ]
+    ]
+   }
+  ]
+ },
+ "carro": {
+  "chaves": "carro motor automovel",
+  "tema": "como um carro anda",
+  "mundo": "oficina",
+  "final": "CARRO LIGADO!",
+  "etapas": [
+   {
+    "o": "ideia ruim: uma carroceria sem motor",
+    "itens": [
+     [
+      "veiculo_sedan",
+      "dirige",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "o carro não anda sozinho; solução: explosões empurram um pistão",
+    "nome": "Pistão",
+    "itens": [
+     [
+      "mec_pistao_biela",
+      "desliza",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "um pistão só dá trancos; solução: vários juntos",
+    "nome": "Motor",
+    "itens": [
+     [
+      "mec_motor_combustao",
+      "desliza",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "o motor esquenta demais; solução: água resfriada",
+    "nome": "Radiador",
+    "itens": [
+     [
+      "mec_radiador",
+      "desliza",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "o motor ligado precisa soltar as rodas para trocar de marcha; solução: separar",
+    "nome": "Embreagem",
+    "itens": [
+     [
+      "mec_embreagem",
+      "desliza",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "força e velocidade mudam; solução: engrenagens de tamanhos diferentes",
+    "nome": "Câmbio",
+    "itens": [
+     [
+      "mec_caixa_cambio",
+      "desliza",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "os buracos sacodem tudo; solução: mola e amortecedor",
+    "nome": "Amortecedor",
+    "itens": [
+     [
+      "mec_amortecedor",
+      "desliza",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "precisa parar rápido; solução: pastilha aperta o disco",
+    "nome": "Freio",
+    "itens": [
+     [
+      "mec_freio_disco",
+      "desliza",
+      1
+     ]
+    ]
+   },
+   {
+    "o": "parabéns e pergunta",
+    "itens": [
+     [
+      "veiculo_esportivo",
+      "dirige",
+      1
+     ]
+    ]
+   }
+  ]
+ }
+}

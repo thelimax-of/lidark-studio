@@ -1,0 +1,38 @@
+{
+ "tema": "tratamento de agua",
+ "titulo": "Como construir o tratamento de água do zero, parte por parte",
+ "falas": [
+  "Se você ligar um cano direto no rio, a água sai barrenta na torneira e a cidade fica doente.",
+  "Mas o rio traz galho, folha e lixo. Então você coloca uma grade, e a bomba puxa só a água. Essa é a captação.",
+  "Mas a água continua barrenta. Então você mistura um produto que gruda a sujeira fina. Essa é a coagulação.",
+  "Mas os grãos são leves demais. Então você mexe devagar, e eles viram flocos grandes. Essa é a floculação.",
+  "Mas os flocos continuam soltos. Então você deixa a água quase parada num tanque, e eles afundam. Essa é a decantação.",
+  "Mas a sujeira miúda não afunda. Então você passa a água por areia e carvão. Essa é a filtração.",
+  "Mas alguns germes escapam do filtro. Então você pinga cloro, e eles morrem. Essa é a desinfecção.",
+  "Mas a água precisa chegar em cada casa. Então você enterra canos embaixo das ruas. Essa é a rede.",
+  "Mas de manhã todo mundo abre a torneira junto, e a água falta. Então você guarda água num tanque no alto do morro, e ela desce sozinha. Esse é o reservatório.",
+  "Parabéns, você construiu o tratamento de água! Tem gente que jura que água transparente é sempre água limpa. Verdade ou mentira?"
+ ],
+ "destaque": [
+  "captação",
+  "coagulação",
+  "floculação",
+  "decantação",
+  "filtração",
+  "desinfecção",
+  "rede",
+  "reservatório"
+ ],
+ "capa": "DO RIO À TORNEIRA",
+ "descricao": "Como a água do rio vira água de beber, construído parte por parte: captação, coagulação, floculação, decantação, filtração, desinfecção, rede e reservatório. Água transparente é sempre água limpa? Verdade ou mentira?",
+ "tags": [
+  "tratamento de água",
+  "como funciona",
+  "saneamento",
+  "engenharia",
+  "água potável",
+  "parte por parte",
+  "curiosidades",
+  "shorts"
+ ]
+}

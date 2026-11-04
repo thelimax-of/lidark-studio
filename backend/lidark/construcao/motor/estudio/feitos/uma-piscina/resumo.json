@@ -1,0 +1,39 @@
+{
+ "tema": "Uma piscina",
+ "titulo": "Como construir uma piscina do zero, parte por parte",
+ "falas": [
+  "A piscina está vazando. A água foge pela rachadura, e o quintal vira lama. Buraco com cimento não segura água.",
+  "Mas a água pesa, e a terra solta cede. Então a máquina cava, e o compactador firma o fundo. Essa é a escavação.",
+  "Mas o concreto racha com o empurrão da terra. Então você amarra vergalhões de aço em grade. Essa é a armação.",
+  "Mas água parada fica verde. Então você prende ralos e canos no aço, ligados à casa de máquinas. Essa é a tubulação.",
+  "Mas a grade ainda é vazada. Então uma mangueira dispara concreto sobre o aço. Esse é o concreto projetado.",
+  "Mas o concreto tem poros, e a água escapa. Então você pinta camadas de massa elástica. Essa é a impermeabilização.",
+  "Mas concreto áspero machuca o pé. Então você cola pastilhas, uma por uma, e uma borda de pedra. Esse é o revestimento.",
+  "Mas a água chega turva. Então a bomba empurra a água por um tanque de areia, que prende a sujeira. Esse é o filtro.",
+  "Mas de noite ninguém enxerga o fundo. Então você embute luzes vedadas nas paredes. Essa é a iluminação.",
+  "Parabéns, você construiu uma piscina! Tem gente que jura que nadar logo depois de comer dá congestão. Verdade ou mentira?"
+ ],
+ "destaque": [
+  "escavação",
+  "armação",
+  "tubulação",
+  "projetado",
+  "impermeabilização",
+  "revestimento",
+  "filtro",
+  "iluminação"
+ ],
+ "capa": "DO VAZAMENTO AO MERGULHO",
+ "descricao": "Como uma piscina que vaza vira uma piscina de verdade, construída parte por parte: escavação, armação de aço, tubulação, concreto projetado, impermeabilização, revestimento de pastilhas, filtro de areia e iluminação. Nadar logo depois de comer dá congestão? Verdade ou mentira?",
+ "tags": [
+  "piscina",
+  "como funciona",
+  "engenharia",
+  "construção",
+  "piscina de concreto",
+  "filtro de areia",
+  "parte por parte",
+  "curiosidades",
+  "shorts"
+ ]
+}

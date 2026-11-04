@@ -186,7 +186,7 @@ def synth_lines(ch: Channel, b: dict[str, Any], beats: list[dict[str, Any]], wor
 def episode_of(sc: Script, *, vetor_beats: bool = False) -> dict[str, Any]:
     st = dict((sc.variety or {}).get("story") or {})
     # motor vetorial não usa imagens: sem beats, a etapa story_assets planeja zero imagens e segue direto para o render
-    st["beats"] = [] if st.get("render_style") == "vetor" and not vetor_beats else [dict(x) for x in sc.scenes or []]
+    st["beats"] = [] if st.get("render_style") in ("vetor", "quadro") and not vetor_beats else [dict(x) for x in sc.scenes or []]
     st.setdefault("title", sc.title)
     st.setdefault("thumbnail_text", sc.thumbnail_text)
     return st
@@ -198,6 +198,9 @@ def produce_story(ch: Channel, sc: Script, video_id: int, ctx: Any) -> dict[str,
     if b.get("render_style") == "vetor":
         from . import vetor_director
         return vetor_director.produce(ch, sc, video_id, ctx, b, episode_of(sc, vetor_beats=True))
+    if b.get("render_style") == "quadro":
+        from . import quadro_director
+        return quadro_director.produce(ch, sc, video_id, ctx, b, episode_of(sc, vetor_beats=True))
     ep = episode_of(sc)
     fmt = sc.format or "short"
     vertical = fmt == "short"

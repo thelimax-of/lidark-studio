@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import clsx from 'clsx'
 import {
   ArrowLeft, RefreshCw, Sparkles, Save, Undo2, Play, Pause, Users, Eye, PlaySquare, ExternalLink, Wand2,
-  Image as ImageIcon, Palette, Mic, Bot, ChevronDown, Plus, X, Loader2, Type, Music, Upload, Trash2, Flame, BookOpen, Tv, Radio, Smartphone,
+  Image as ImageIcon, Palette, Mic, Bot, ChevronDown, Plus, X, Loader2, Type, Music, Upload, Trash2, Flame,
 } from 'lucide-react'
 import { api, invalidate, onJob, useApi, type Channel } from '../api'
 import { act, ago, fmtNum, Skeleton, toast } from '../ui'
@@ -18,9 +18,6 @@ export default function ChannelDetail() {
   const { id } = useParams()
   const { data } = useApi<Ch>(`/channels/${id}`)
   const { data: list = [] } = useApi<Ch[]>('/channels')
-  // canal dedicado ao Modo História: visual, voz e imagens vêm da bíblia da série (sem mascote nem modelos de cartão)
-  const { data: bible } = useApi<StoryBible>(`/story/${id}/bible`)
-  const story = !!bible?.dedicated && bible?.enabled !== false
   const [f, setF] = useState<Ch | null>(null)
   const [dirty, setDirty] = useState(false)
   const [previewV, setPreviewV] = useState(Date.now())
@@ -112,7 +109,6 @@ export default function ChannelDetail() {
             </div>
           </Section>
 
-          {story && bible ? <StorySection b={bible} /> : <>
           <Section icon={<Palette size={18} />} title="Visual do vídeo" subtitle="Modelo, mascote, cores e fontes. Tudo próprio deste canal."
             action={<button className="btn" onClick={() => ai('visual', 'IA criando um visual novo…')}><Wand2 size={15} /> Novo visual com IA</button>}>
             <Label>Modelo</Label>
@@ -147,7 +143,6 @@ export default function ChannelDetail() {
             <VoicePicker f={f} set={set} />
             <AudioOptions f={f} set={set} setTheme={setTheme} />
           </Section>
-          </>}
 
           <Section icon={<Flame size={18} />} title="Radar de tendências" subtitle="Todo dia às 7h o sistema vasculha buscas, vídeos virais e concorrentes e cria pautas do momento."
             action={<button className="btn" onClick={() => act(() => api(`/channels/${f.id}/radar`, { body: {} }), 'Radar rodando — veja em Pautas')}><Flame size={15} /> Rodar agora</button>}>
@@ -162,7 +157,6 @@ export default function ChannelDetail() {
 
           <CampaignsSection channelId={f.id} />
 
-          {!story && <>
           <Section icon={<Music size={18} />} title="Trilhas sonoras" subtitle="Músicas deste canal (sem exigência de crédito). Sem trilhas, o sistema gera uma trilha ambiente própria.">
             <MusicLibrary channelId={f.id} />
           </Section>
@@ -189,7 +183,6 @@ export default function ChannelDetail() {
               </Callout>
             )}
           </Section>
-          </>}
 
           <Section icon={<Bot size={18} />} title="Piloto automático" subtitle="Produz e agenda sozinho nos horários escolhidos.">
             <div className="flex items-center gap-3 mb-4">
@@ -228,7 +221,6 @@ export default function ChannelDetail() {
         </div>
 
         {/* prévia */}
-        {story ? <StoryAside slug={f.slug} /> :
         <div className="card p-4 xl:sticky xl:top-4">
           <div className="flex items-center justify-between mb-3">
             <div className="font-semibold">Prévia do vídeo</div>
@@ -243,7 +235,7 @@ export default function ChannelDetail() {
           </div>
           <p className="text-xs text-muted mt-3">A prévia usa o banner do canal como imagem de exemplo. Salve as mudanças para atualizar.</p>
           <BrandKit channelId={f.id} beforeRun={dirty ? save : undefined} />
-        </div>}
+        </div>
       </div>
 
       {dirty && (
@@ -253,73 +245,6 @@ export default function ChannelDetail() {
           <button className="btn btn-sm btn-primary" onClick={save}><Save size={14} /> Salvar</button>
         </div>
       )}
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------- Modo História
-
-type Voice = { provider?: string; voice?: string; speed?: number; rate?: string; pitch?: string }
-type StoryBible = {
-  dedicated?: boolean; enabled?: boolean; series_title?: string; premise?: string; style?: string; palette?: string[]
-  characters?: { id: string; name: string; role?: string; desc?: string }[]; missions?: string[]; locations?: string[]
-  voices?: Record<string, Voice>; hud?: { devices?: string[] }
-}
-const VOICE_NAMES: Record<string, string> = {
-  pf_dora: 'Dora (local)', pm_alex: 'Alex (local)', pm_santa: 'Santa (local)',
-  'pt-BR-FranciscaNeural': 'Francisca', 'pt-BR-AntonioNeural': 'Antonio',
-}
-const DEVICE_NAMES: Record<string, [string, ReactNode]> = {
-  tv: ['TV', <Tv size={13} />], radio: ['Rádio', <Radio size={13} />], phone: ['Celular', <Smartphone size={13} />],
-  monitor: ['Monitor', <Tv size={13} />], comms: ['Rádio de bordo', <Radio size={13} />], proclamation: ['Alto-falante', <Radio size={13} />],
-  newsboy: ['Jornaleiro', <Mic size={13} />],
-}
-const voiceLabel = (v?: Voice) => v ? `${VOICE_NAMES[v.voice ?? ''] ?? v.voice}${v.speed && v.speed !== 1 ? ` · ${v.speed}x` : ''}` : '—'
-
-/** Resumo da série do canal (a edição completa fica na tela Modo História). */
-function StorySection({ b }: { b: StoryBible }) {
-  const v = b.voices ?? {}
-  return (
-    <Section icon={<BookOpen size={18} />} title={`Modo História · ${b.series_title ?? ''}`}
-      subtitle="Todo vídeo deste canal é um episódio ilustrado com missão, cronômetro e telas de TV, rádio e celular. Sem mascote nem cartão."
-      action={<Link to="/modo-historia" className="btn"><BookOpen size={15} /> Editar a série</Link>}>
-      <p className="text-sm text-muted mb-4">{b.premise}</p>
-      <Label>Elenco e vozes</Label>
-      <div className="grid sm:grid-cols-2 gap-2 mb-4">
-        <div className="surface-2 px-3 py-2 flex items-center justify-between gap-3"><span className="font-medium">Narradora</span><span className="text-sm text-muted">{voiceLabel(v.narrador)}</span></div>
-        {(b.characters ?? []).map(c => (
-          <div key={c.id} className="surface-2 px-3 py-2 flex items-center justify-between gap-3">
-            <span className="font-medium">{c.name} <span className="text-xs text-faint font-normal">{c.role}</span></span>
-            <span className="text-sm text-muted">{voiceLabel(v[c.id])}</span>
-          </div>
-        ))}
-      </div>
-      <Label>Telas que aparecem nos episódios</Label>
-      <div className="flex flex-wrap gap-2 mb-4">
-        {(b.hud?.devices ?? []).map(d => <span key={d} className="badge badge-accent inline-flex items-center gap-1.5">{DEVICE_NAMES[d]?.[1]}{DEVICE_NAMES[d]?.[0] ?? d}</span>)}
-      </div>
-      <Label>Missões</Label>
-      <div className="flex flex-wrap gap-2">{(b.missions ?? []).map(m => <span key={m} className="badge">{m}</span>)}</div>
-    </Section>
-  )
-}
-
-/** Coluna da direita do canal de história: últimos episódios e o banco de imagens. */
-function StoryAside({ slug }: { slug: string }) {
-  const { data: ov } = useApi<any>('/story/overview')
-  const ch = (ov?.channels ?? []).find((c: any) => c.slug === slug)
-  return (
-    <div className="card p-4 xl:sticky xl:top-4 space-y-3">
-      <div className="font-semibold flex items-center gap-2"><BookOpen size={16} /> Série do canal</div>
-      {ch ? (
-        <div className="grid grid-cols-2 gap-2 text-sm">
-          {[['Episódios', ch.episodes ?? 0], ['Imagens no banco', ch.bank?.total ?? 0]].map(([l, n]) => (
-            <div key={l} className="surface-2 px-3 py-2"><div className="text-[18px] font-semibold num">{n}</div><div className="text-xs text-muted">{l}</div></div>
-          ))}
-        </div>
-      ) : <Skeleton className="h-16" />}
-      <p className="text-xs text-muted">Logo, banner e marca d'água já estão definidos (Kit Canal Zé na Fuga). Personagens, cenários e episódios ficam na tela Modo História.</p>
-      <Link to="/modo-historia" className="btn btn-primary w-full justify-center"><BookOpen size={15} /> Abrir Modo História</Link>
     </div>
   )
 }

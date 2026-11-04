@@ -19,3 +19,7 @@ __pycache__/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# worktrees e configuracoes locais do Claude Code
+.claude/worktrees/
+.claude/settings.local.json

@@ -8,7 +8,6 @@ import clsx from 'clsx'
 import { api, invalidate, useApi, type Idea } from '../api'
 import { act, Empty, Field, Menu, Modal, PageHeader, ScoreRing, Status, Tabs, toast, useChannel } from '../ui'
 import { Bar, Callout, RowsSkeleton, useProgressive } from './kit'
-import { SeriesPlanCard } from '../components/SeriesCard'
 
 const TABS = [
   { k: 'new,approved', label: 'Na fila' },
@@ -285,7 +284,6 @@ function IdeaModal({ base, onClose }: { base: IdeaX; onClose: () => void }) {
               </div>
             </Block>
           )}
-          {idea.tags?.includes('serie') && <SeriesPlanCard channelId={idea.channel_id} ideaId={idea.id} />}
           {idea.score_reason && <Block label="Por que essa nota"><p className="text-sm text-text/80">{idea.score_reason}</p></Block>}
           {!!idea.score_breakdown?.improvements?.length && (
             <Block label="Como melhorar">
@@ -370,10 +368,8 @@ function DiscoverModal({ open, onClose }: { open: boolean; onClose: () => void }
   const { channel } = useChannel()
   const [f, setF] = useState({ seed: '', count: 8, format: 'short', mode: 'opcoes', parts: 0 })
   // canal só de histórias: cada pauta é uma série inteira — o dono escolhe se ela é sequencial ou com escolhas A/B
-  const { data: bible } = useApi<{ dedicated?: boolean; enabled?: boolean }>(channel ? `/story/${channel.id}/bible` : null)
-  const story = !!bible?.dedicated && bible?.enabled !== false
-  const submit = () => channel && act(() => api('/ideas/discover', { body: { ...f, count: story ? Math.min(3, f.count) : f.count, channel_id: channel.id } }),
-    story ? 'Planejando séries…' : 'Buscando pautas na internet…').then(onClose)
+  const submit = () => channel && act(() => api('/ideas/discover', { body: { ...f, count: f.count, channel_id: channel.id } }),
+    'Buscando pautas na internet…').then(onClose)
   return (
     <Modal open={open} onClose={onClose} title="Buscar pautas com IA">
       <div className="space-y-4">
@@ -390,19 +386,7 @@ function DiscoverModal({ open, onClose }: { open: boolean; onClose: () => void }
             </div>
           </Field>
         </div>
-        {story && (
-          <Field label="Tipo de série" hint="Sequencial: a história segue sozinha, parte após parte. Com opções: 1 ou 2 momentos em que o público (ou você, pelos botões em Modo História → Séries) escolhe A ou B.">
-            <div className="seg w-full">
-              {[['sequencial', 'Sequencial'], ['opcoes', 'Com opções A/B']].map(([k, l]) => (
-                <button key={k} type="button" className="flex-1 justify-center" data-active={f.mode === k} onClick={() => setF({ ...f, mode: k })}>{l}</button>
-              ))}
-            </div>
-          </Field>)}
-        {story && (
-          <Field label="Episódios por série" hint="0 = a IA decide e cada série sai com um tamanho diferente. Para uma série diária, coloque 30.">
-            <input type="number" min={0} max={60} className="input" value={f.parts} onChange={e => setF({ ...f, parts: Number(e.target.value) })} />
-          </Field>)}
-        <button className="btn btn-primary btn-lg w-full" onClick={submit}><Sparkles size={16} /> {story ? 'Planejar séries' : 'Buscar'}</button>
+        <button className="btn btn-primary btn-lg w-full" onClick={submit}><Sparkles size={16} /> Buscar</button>
       </div>
     </Modal>
   )

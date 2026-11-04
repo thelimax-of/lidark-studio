@@ -224,6 +224,8 @@ def start() -> None:
     _sched.add_job(fetch_comments, "interval", hours=2, id="comments", max_instances=1, coalesce=True,
                    next_run_time=datetime.now() + timedelta(minutes=8))
     _sched.add_job(backup_db, "cron", hour=3, minute=0, id="backup", max_instances=1, coalesce=True)
+    _sched.add_job(lambda: enqueue("construcao_semanal", title="Vídeo longo da semana: Parte por Parte", payload={"publicar": True}),
+                   "cron", day_of_week="sat", hour=22, minute=0, id="construcao_semanal", max_instances=1, coalesce=True)
     _sched.add_job(cloud_backup, "cron", hour=3, minute=20, id="cloud_backup", max_instances=1, coalesce=True)
     from .notify import send_daily
     _sched.add_job(send_daily, "cron", hour=21, minute=0, id="daily_summary", max_instances=1, coalesce=True)
